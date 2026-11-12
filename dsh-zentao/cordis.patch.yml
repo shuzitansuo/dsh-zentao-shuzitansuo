@@ -1,0 +1,18 @@
+- insert:
+    - id: zentao-workbench
+      name: '@local/dsh-zentao'
+      config:
+        # 换成你自己的禅道地址（不要带结尾斜杠）
+        baseUrl: 'http://你的禅道地址:端口'
+        # 登录禅道的账号
+        account: '你的账号'
+        # 登录禅道的密码（仅保存在本机 profile 里，别提交到公开仓库）
+        password: '你的密码'
+        # 左树是否默认展示已关闭的项目/迭代；面板里还有开关可随时切换
+        showClosed: true
+        # native = 用 DeepSeek 原生会话聊天、禅道能力注册为 agent tools（面板只保留树+列表）
+        # custom = 插件自带的三栏聊天面板（默认，功能最完整）
+        chatMode: custom
+        # 指派提醒：只读轮询「我的 Bug/需求」页面，发现新指派或我名下条目状态变化时提示
+        assignmentWatch: true
+        assignmentIntervalMs: 60000
