@@ -18,6 +18,8 @@ export const name = 'dsh-zentao';
 export const inject = ['tools'];
 
 const ROUTE_PREFIX = '/zentao/api';
+// Dashboard statistics fan out across projects/iterations; keep them warm.
+const DASHBOARD_TTL = 5 * 60 * 1000;
 
 const STATUS_OPTIONS = {
   project: [
@@ -93,6 +95,7 @@ export function apply(ctx, config = {}) {
   }
 
   const cache = new Map();
+  let dashboardRefreshing = false;
   const cached = async (key, ttl, load) => {
     const hit = cache.get(key);
     if (hit && Date.now() - hit.at < ttl) return hit.value;
@@ -344,8 +347,26 @@ export function apply(ctx, config = {}) {
     if (method === 'GET' && path === 'dashboard') {
       const fresh = url.searchParams.get('fresh') === '1';
       try {
-        const data = fresh ? await client.dashboard() : await cached('dashboard', 120000, () => client.dashboard());
-        if (fresh) cache.set('dashboard', { at: Date.now(), value: data });
+        // 仪表盘统计要并发读多个项目/迭代，耗时较长：优先返回已有快照，
+        // 过期后在后台刷新（stale-while-revalidate），避免每次打开都等统计。
+        if (!fresh) {
+          const hit = cache.get('dashboard');
+          if (hit) {
+            if (Date.now() - hit.at > DASHBOARD_TTL && !dashboardRefreshing) {
+              dashboardRefreshing = true;
+              client
+                .dashboard()
+                .then((value) => cache.set('dashboard', { at: Date.now(), value }))
+                .catch(() => {})
+                .finally(() => {
+                  dashboardRefreshing = false;
+                });
+            }
+            return json(res, 200, { ok: true, dashboard: hit.value, cached: true });
+          }
+        }
+        const data = await client.dashboard();
+        cache.set('dashboard', { at: Date.now(), value: data });
         return json(res, 200, { ok: true, dashboard: data });
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });
@@ -425,6 +446,29 @@ export function apply(ctx, config = {}) {
         }
         const result = await applyUpdate({ downloadUrl: info.downloadUrl, sha256: info.sha256 });
         return json(res, 200, { ok: true, version: result.version, files: result.files, restartRequired: true });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'GET' && path === 'story-module-options') {
+      const id = Number(url.searchParams.get('id') || 0);
+      if (!id) return json(res, 400, { ok: false, error: 'id required' });
+      try {
+        const data = await client.storyModuleOptions(id);
+        return json(res, 200, Object.assign({ ok: true }, data));
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'story-module') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.setStoryModule(Number(body.id), Number(body.moduleId));
+        invalidate('items:');
+        invalidate('dashboard');
+        return json(res, 200, { ok: true, result });
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });
       }

@@ -1,14 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <defs>
-    <linearGradient id="ztg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2f7ef7"/>
-      <stop offset="1" stop-color="#1450c9"/>
-    </linearGradient>
-  </defs>
-  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#ztg)"/>
-  <rect x="13" y="16" width="9" height="32" rx="3" fill="#ffffff" opacity="0.92"/>
-  <rect x="27.5" y="16" width="9" height="22" rx="3" fill="#ffffff" opacity="0.72"/>
-  <rect x="42" y="16" width="9" height="14" rx="3" fill="#ffffff" opacity="0.5"/>
-  <circle cx="47" cy="45" r="6.5" fill="#7ff0c0"/>
-  <path d="M43.8 45.2l2.2 2.2 4.2-4.6" fill="none" stroke="#1450c9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <style>
+    .ink { stroke: #2b2f36; }
+    .brand { stroke: #2f6bf6; }
+    @media (prefers-color-scheme: dark) {
+      .ink { stroke: #e9eaec; }
+      .brand { stroke: #6f9bff; }
+    }
+  </style>
+  <g stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- folder outline -->
+    <path class="ink" d="M9 19.5A4.5 4.5 0 0 1 13.5 15h9.4c1.2 0 2.3.48 3.1 1.34L29.4 20h21.1A4.5 4.5 0 0 1 55 24.5v22A4.5 4.5 0 0 1 50.5 51h-37A4.5 4.5 0 0 1 9 46.5v-27Z"/>
+    <!-- workbench columns inside the folder -->
+    <path class="ink" d="M21 31v12"/>
+    <path class="brand" d="M31 31v12"/>
+    <path class="ink" d="M41 31v8"/>
+  </g>
 </svg>

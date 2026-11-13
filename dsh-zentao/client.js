@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.0.4';
+    const PLUGIN_VERSION = 'v0.0.5';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
@@ -128,7 +128,7 @@ window.__ModuleLoader__.load({
     }
 
     function loadLayout() {
-      const fallback = { leftOpen: true, rightOpen: true, leftW: 300, rightW: 420 };
+      const fallback = { leftOpen: true, rightOpen: true, leftW: 350, rightW: 420 };
       const viewport = typeof window !== 'undefined' ? window.innerWidth || 1280 : 1280;
       // Leave at least a usable dashboard/calendar column in the current viewport.
       const MIN_MIDDLE = 680;
@@ -538,20 +538,18 @@ window.__ModuleLoader__.load({
     }
 
     function GlyphIcon(props) {
-      // Path data from tdesign-icons-react@0.6.12: 24px grid, 2px stroke,
-      // square caps — the geometry TDesign uses for its own toolbar icons.
+      // 24px grid line icons with round caps, matching the shell's icon family.
       const name = props.name;
       const size = props.size || 16;
-      const s = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'square', strokeLinejoin: 'miter' };
+      const s = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' };
       const paths = {
-        'chevron-left': ['M14.5 17.5L9 12L14.5 6.5'],
-        'chevron-right': ['M9.5 17.5L15 12L9.5 6.5'],
-        'chevron-down': ['M17.5 9.5L12 15L6.5 9.5'],
+        'chevron-left': ['m15 18-6-6 6-6'],
+        'chevron-right': ['m9 18 6-6-6-6'],
+        'chevron-down': ['m6 9 6 6 6-6'],
+        'chevron-up': ['m18 15-6-6-6 6'],
         plus: ['M12 5L12 19M19 12L5 12'],
         reset: ['M5.75 7H14C17.3137 7 20 9.68629 20 13C20 16.3137 17.3137 19 14 19L6.5 19M8 10.5L4.5 7L8 3.5'],
-        refresh: [
-          'M21.448 13C20.9483 17.7767 16.909 21.5 12 21.5C8.18227 21.5 4.89052 19.248 3.38065 16M2.5 20.5V15.5H5.5M2.55176 11C3.05145 6.22334 7.09079 2.5 11.9998 2.5C15.8175 2.5 19.1092 4.75197 20.6191 8M21.4998 3.5V8.5H18.4998',
-        ],
+        refresh: ['M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8', 'M21 3v5h-5'],
         close: ['M16.9503 7.05029L12.0005 12M12.0005 12L7.05078 16.9498M12.0005 12L16.9503 16.9498M12.0005 12L7.05078 7.05029'],
         trash: ['M21 5H3M5 5H19L18.5 22H5.5L5 5ZM8.5 2H15.5V5H8.5V2Z', 'M12 9V18'],
         'arrow-up': ['M17.5 10.5L12 5L6.5 10.5M12 6.25V19.25'],
@@ -564,13 +562,13 @@ window.__ModuleLoader__.load({
         bell: ['M5 8V13L3 16V19H21V16L19 13V8C19 4.13401 15.866 1 12 1C8.13401 1 5 4.13401 5 8Z', 'M8.5 19H15.5C15.5 20.933 13.933 22.5 12 22.5C10.067 22.5 8.5 20.933 8.5 19Z'],
         'new-chat': ['M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 14.6624 3.04042 17.0817 4.73686 18.8737L3 22H12Z', 'M12 8.5V15.5M8.5 12H15.5'],
         copy: ['M5 8.5H14.5C15.3 8.5 16 9.2 16 10V19C16 19.8 15.3 20.5 14.5 20.5H5C4.2 20.5 3.5 19.8 3.5 19V10C3.5 9.2 4.2 8.5 5 8.5Z', 'M9.5 4.5H18.5C19.3 4.5 20 5.2 20 6V15.5'],
-        attach: ['M20.5062 12.3131L12.728 20.0913C10.3848 22.4344 6.58586 22.4344 4.24271 20.0913C1.89957 17.7481 1.89956 13.9491 4.24271 11.606L12.0209 3.82782C13.583 2.26573 16.1156 2.26573 17.6777 3.82782C19.2398 5.38992 19.2398 7.92258 17.6777 9.48468L9.89957 17.2628C9.11852 18.0439 7.85219 18.0439 7.07114 17.2628C6.29009 16.4818 6.29009 15.2155 7.07114 14.4344L14.1422 7.36336'],
+        attach: ['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'],
         edit: ['M14.1048 6.00427L4.78744 15.3216L3.99805 20.0001L8.67652 19.2107L17.9939 9.89336L14.1048 6.00427ZM14.1048 6.00427L17.1615 2.94727L21.0506 6.83635L17.9939 9.89336'],
         bookmark: ['M6.5 3H17.5V21L12 16.5L6.5 21V3Z'],
         'fold-vertical': ['M7 3L12 8L17 3', 'M7 21L12 16L17 21'],
         'unfold-vertical': ['M7 9L12 4L17 9', 'M7 15L12 20L17 15'],
-        folder: ['M2 3.5H9L11 6H22V20H2V3.5Z'],
-        'folder-open': ['M2 20V3.5H8.5L10.5 6H22V9', 'M2 20L5 9H22L18.5 20H2Z'],
+        folder: ['M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'],
+        'folder-open': ['m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2'],
         mic: ['M12 18V21M7 21H17M6.5 14H9M6.5 7H9M6.5 10.5H9M15 14H17.5M15 7H17.5M15 10.5H17.5M6 7V13C6 13.3425 6.03443 13.6769 6.10002 14C6.56329 16.2822 8.58104 18 11 18C11.781 18 12.219 18 13 18C15.419 18 17.4367 16.2822 17.9 14C17.9656 13.6769 18 13.3425 18 13V7C18 4.23858 15.7614 2 13 2H11C8.23858 2 6 4.23858 6 7Z'],
         search: [
           'M15.8033 15.8033C12.8744 18.7322 8.12563 18.7322 5.1967 15.8033C2.26777 12.8744 2.26777 8.12563 5.1967 5.1967C8.12563 2.26777 12.8744 2.26777 15.8033 5.1967C18.7322 8.12563 18.7322 12.8744 15.8033 15.8033Z',
@@ -908,12 +906,35 @@ window.__ModuleLoader__.load({
       // 每次打开软件默认进入仪表盘；会话内可切到列表。
       const [view, setView] = useState('dashboard');
       const [pinned, setPinned] = useState(loadPinned);
-      const [dashboard, setDashboard] = useState({ loading: false, error: '', data: null });
+      const [dashboard, setDashboard] = useState(() => {
+        try {
+          const cached = JSON.parse(localStorage.getItem('dsh-zentao-dashboard-v1') || 'null');
+          if (cached && cached.weekStart) return { loading: false, error: '', data: cached };
+        } catch (error) {
+          /* ignore a broken cache */
+        }
+        return { loading: false, error: '', data: null };
+      });
       const [calendarMonth, setCalendarMonth] = useState(() => {
         const now = new Date();
         return { year: now.getFullYear(), month: now.getMonth() + 1 };
       });
       const [calendarMode, setCalendarMode] = useState('week');
+      const [showDoneTasks, setShowDoneTasks] = useState(() => {
+        try {
+          return localStorage.getItem('dsh-zentao-calendar-done-v1') !== '0';
+        } catch (error) {
+          return true;
+        }
+      });
+
+      useEffect(() => {
+        try {
+          localStorage.setItem('dsh-zentao-calendar-done-v1', showDoneTasks ? '1' : '0');
+        } catch (error) {
+          /* ignore */
+        }
+      }, [showDoneTasks]);
       const [selectedDate, setSelectedDate] = useState(() => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -1447,9 +1468,14 @@ window.__ModuleLoader__.load({
       const loadDashboard = useCallback(async (fresh = false) => {
         setDashboard((prev) => Object.assign({}, prev, { loading: true, error: '' }));
         try {
-          const res = await api('/zentao/api/dashboard' + (fresh ? '?fresh=1' : ''));
+          const res = await api('/zentao/api/dashboard' + (fresh ? '?fresh=1' : '') + (fresh ? '' : '?t=' + Date.now()));
           if (!res || !res.ok) throw new Error((res && res.error) || '读取仪表盘失败');
           setDashboard({ loading: false, error: '', data: res.dashboard });
+          try {
+            localStorage.setItem('dsh-zentao-dashboard-v1', JSON.stringify(res.dashboard));
+          } catch (error) {
+            /* ignore quota errors */
+          }
         } catch (error) {
           setDashboard((prev) => Object.assign({}, prev, { loading: false, error: error.message }));
         }
@@ -2443,7 +2469,7 @@ window.__ModuleLoader__.load({
           );
         }
         if (key === 'module') {
-          if (item.type === 'task') {
+          if (item.type === 'task' || item.type === 'story') {
             return h(
               'td',
               { key, className: 'zt-col-module' },
@@ -3023,8 +3049,8 @@ window.__ModuleLoader__.load({
           });
           return;
         }
-        if (item.type === 'task' && field === 'module') {
-          api('/zentao/api/task-module-options?id=' + item.id)
+        if ((item.type === 'task' || item.type === 'story') && field === 'module') {
+          api('/zentao/api/' + (item.type === 'task' ? 'task' : 'story') + '-module-options?id=' + item.id)
             .then((data) => {
               if (!data || !data.ok) throw new Error((data && data.error) || '读取模块失败');
               const modules = data.modules || [];
@@ -3168,8 +3194,8 @@ window.__ModuleLoader__.load({
               body: JSON.stringify({ id: editor.item.id, priority: Number(option.value) }),
             });
             if (!result.ok) throw new Error(result.error || '优先级修改失败');
-          } else if (editor.field === 'module' && editor.item.type === 'task') {
-            result = await api('/zentao/api/task-module', {
+          } else if (editor.field === 'module' && (editor.item.type === 'task' || editor.item.type === 'story')) {
+            result = await api('/zentao/api/' + (editor.item.type === 'task' ? 'task-module' : 'story-module'), {
               method: 'POST',
               headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
               body: JSON.stringify({ id: editor.item.id, moduleId: Number(option.value) }),
@@ -3328,7 +3354,8 @@ window.__ModuleLoader__.load({
         const today = new Date();
         const todayKey = dateKeyOf(today);
         const byDate = new Map();
-        for (const task of myTasks.tasks || []) {
+        const calendarTasks = showDoneTasks ? myTasks.tasks : myTasks.tasks.filter((task) => !task.done);
+        for (const task of calendarTasks || []) {
           if (!task.deadline) continue;
           if (!byDate.has(task.deadline)) byDate.set(task.deadline, []);
           byDate.get(task.deadline).push(task);
@@ -3481,7 +3508,7 @@ window.__ModuleLoader__.load({
             cells.push(buildCell(new Date(year, month - 1, day)));
           }
           while (cells.length < 42) cells.push(h('div', { key: 'tail-' + cells.length, className: 'zt-cal-cell zt-cal-blank' }));
-          titleText = year + ' 年 ' + month + ' 月';
+          titleText = year + ' / ' + String(month).padStart(2, '0');
         } else {
           const anchor = weekAnchor ? new Date(weekAnchor + 'T00:00:00') : today;
           const monday = new Date(anchor);
@@ -3495,15 +3522,15 @@ window.__ModuleLoader__.load({
           sunday.setDate(monday.getDate() + 6);
           titleText =
             monday.getFullYear() +
-            ' 年 ' +
-            (monday.getMonth() + 1) +
-            ' 月 ' +
-            monday.getDate() +
-            ' 日 - ' +
-            (sunday.getMonth() + 1) +
-            ' 月 ' +
-            sunday.getDate() +
-            ' 日';
+            ' / ' +
+            String(monday.getMonth() + 1).padStart(2, '0') +
+            ' / ' +
+            String(monday.getDate()).padStart(2, '0') +
+            ' - ' +
+            (sunday.getFullYear() !== monday.getFullYear() ? sunday.getFullYear() + ' / ' : '') +
+            String(sunday.getMonth() + 1).padStart(2, '0') +
+            ' / ' +
+            String(sunday.getDate()).padStart(2, '0');
         }
         const shift = (delta) => {
           if (isWeek) {
@@ -3533,7 +3560,21 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'zt-cal-title-wrap' },
-              h('div', { className: 'zt-cal-title' }, '任务日历'),
+              h(
+                'div',
+                { className: 'zt-cal-title-line' },
+                h('div', { className: 'zt-cal-title' }, '任务日历'),
+                h(
+                  'label',
+                  { className: 'zt-cal-done-toggle', title: '在日历上显示/隐藏已完成任务' },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: showDoneTasks,
+                    onChange: (event) => setShowDoneTasks(event.target.checked),
+                  }),
+                  h('span', null, '显示已完成'),
+                ),
+              ),
               h('div', { className: 'zt-cal-sub' }, '双击日期空白处新建任务，拖动任务可改截止日期'),
             ),
             h(
@@ -4105,8 +4146,18 @@ window.__ModuleLoader__.load({
                                 rel: 'noreferrer noopener',
                                 title: '在禅道打开',
                               },
+                              h('span', { className: 'zt-dash-row-dot zt-dash-dot-' + section.key, 'aria-hidden': true }),
                               h('span', { className: 'zt-dash-row-title' }, item.title),
-                              h('span', { className: 'zt-dash-row-date' }, item.deadline || '—'),
+                              h(
+                                'span',
+                                { className: 'zt-dash-row-date' },
+                                (() => {
+                                  const value = String(item.deadline || '');
+                                  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                                  if (!match) return value || '—';
+                                  return match[1] === String(new Date().getFullYear()) ? match[2] + '-' + match[3] : value;
+                                })(),
+                              ),
                             ),
                           )
                         : h('div', { className: 'zt-dash-empty' }, '暂无'),
@@ -5826,7 +5877,11 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-dash-list-head-task{background:#ed7b2f}
 .zt-dash-list-count{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:20px;padding:0 7px;border-radius:20px;background:rgba(255,255,255,.22);color:#fff;font-size:12px;font-weight:500;font-variant-numeric:tabular-nums}
 .zt-dash-list-body{flex:1;min-height:0;overflow:auto;padding:4px 0;scrollbar-width:thin}
-.zt-dash-row{display:flex;align-items:center;gap:12px;padding:9px 14px;text-decoration:none;color:var(--td-text-color-primary)}
+.zt-dash-row{display:flex;align-items:center;gap:10px;padding:9px 14px;text-decoration:none;color:var(--td-text-color-primary)}
+.zt-dash-row-dot{flex:0 0 auto;width:5px;height:5px;border-radius:50%;background:var(--td-brand-color)}
+.zt-dash-dot-story{background:#2f7cf6}
+.zt-dash-dot-bug{background:#e34d59}
+.zt-dash-dot-task{background:#ed7b2f}
 .zt-dash-row:hover{background:var(--td-bg-color-container-hover)}
 .zt-dash-row-title{flex:1;min-width:0;font-size:13px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .zt-dash-row-date{flex:0 0 auto;font-size:12px;color:var(--td-text-color-secondary);font-variant-numeric:tabular-nums}
@@ -5845,14 +5900,18 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-cal-title{font-size:14px;font-weight:600;color:#fff}
 .zt-cal-sub{margin-top:3px;font-size:12px;color:rgba(255,255,255,.78)}
 .zt-cal-mode-slot{display:flex;align-items:center;margin-left:20px;flex:0 0 auto}
-.zt-cal-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
+.zt-cal-actions{display:flex;align-items:center;gap:4px;margin-left:auto;flex-wrap:nowrap;min-width:0}
+.zt-cal-actions>*{flex:0 0 auto}
 .zt-cal-mode{display:inline-flex;gap:2px;padding:2px;border:1px solid rgba(255,255,255,.45);border-radius:var(--td-radius-round,999px);background:rgba(255,255,255,.12)}
 .zt-cal-mode-btn{height:24px;padding:0 10px;border:0;border-radius:var(--td-radius-round,999px);background:transparent;color:rgba(255,255,255,.9);cursor:pointer;font-size:12px;line-height:24px;white-space:nowrap;transition:background-color .15s,color .15s}
 .zt-cal-mode-btn:hover{background:rgba(255,255,255,.18);color:#fff}
 .zt-cal-mode-btn-active{background:#fff;color:#2f7cf6;font-weight:500}
 .zt-cal-month{min-width:104px;padding:0 4px;text-align:center;font-size:13px;font-weight:500;color:#fff;font-variant-numeric:tabular-nums;white-space:nowrap}
-.zt-cal-today-btn{height:28px;padding:0 12px;border:1px solid rgba(255,255,255,.55);border-radius:var(--td-radius-round,999px);background:transparent;color:#fff;cursor:pointer;font-size:12px}
+.zt-cal-today-btn{height:28px;padding:0 10px;white-space:nowrap;border:1px solid rgba(255,255,255,.55);border-radius:var(--td-radius-round,999px);background:transparent;color:#fff;cursor:pointer;font-size:12px}
 .zt-cal-today-btn:hover{background:rgba(255,255,255,.16);border-color:#fff;color:#fff}
+.zt-cal-title-line{display:flex;align-items:center;gap:12px;min-width:0}
+.zt-cal-done-toggle{display:inline-flex;align-items:center;gap:5px;color:rgba(255,255,255,.92);font-size:11px;line-height:16px;cursor:pointer;user-select:none;white-space:nowrap}
+.zt-cal-done-toggle input{width:14px;height:14px;margin:0;accent-color:#fff;cursor:pointer}
 .zt-cal-error{padding:8px 14px;background:rgba(0,0,0,.18);color:#fff;font-size:12px}
 .zt-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:0}
 .zt-cal-week{padding:8px 10px;font-size:12px;font-weight:500;color:var(--td-text-color-placeholder);text-align:center;border-bottom:1px solid var(--td-component-stroke);border-right:1px solid var(--td-component-stroke)}

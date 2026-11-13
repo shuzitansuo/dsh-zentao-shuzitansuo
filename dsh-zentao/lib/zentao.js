@@ -825,6 +825,29 @@ export class ZenTaoClient {
     return { ok: true, assignedTo: value };
   }
 
+  /** Module options available to a story (from its edit form). */
+  async storyModuleOptions(storyId) {
+    const html = await this.#page(`/story-edit-${Number(storyId)}.html`);
+    const modules = selectOptions(html, 'module').map((option) => ({
+      value: String(option.value),
+      label: String(option.label || '').replace(/^\/+/, '').trim() || '无',
+    }));
+    return { modules };
+  }
+
+  /** Move a story into another module (replays the edit form). */
+  async setStoryModule(storyId, moduleId) {
+    const value = Number(moduleId);
+    if (!Number.isFinite(value) || value < 0) throw new ZenTaoError('模块不合法', 'ZT_INPUT');
+    const pagePath = `/story-edit-${Number(storyId)}.html`;
+    const html = await this.#page(pagePath);
+    const form = parseFormFields(html);
+    form.module = String(value);
+    const res = await this.post(pagePath, form);
+    const parsed = parseFormResponse(res, '修改需求模块');
+    return Object.assign({ ok: true, moduleId: value }, parsed);
+  }
+
   /** Module options available to a task (from its edit form). */
   async taskModuleOptions(taskId) {
     const html = await this.#page(`/task-edit-${Number(taskId)}.html`);
@@ -968,7 +991,7 @@ export class ZenTaoClient {
     const data = await this.#apiRequest('GET', 'tasks');
     const list = Array.isArray(data.tasks) ? data.tasks : [];
     const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - 90);
+    cutoffDate.setDate(cutoffDate.getDate() - 365);
     const cutoff = cutoffDate.toISOString().slice(0, 10);
     return list
       .filter((item) => {
