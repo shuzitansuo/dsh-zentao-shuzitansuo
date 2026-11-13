@@ -77,7 +77,7 @@
   { "version": "0.0.3", "url": "https://example.com/dsh-zentao-0.0.3.zip",
     "notes": "更新说明", "sha256": "可选的 zip SHA-256" }
   ```
-- 在 `cordis.patch.yml` 配置 `updateUrl: '.../latest.json'`
+- 在 `cordis.patch.yml` 配置 `updateUrl: 'https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/latest.json'`
 - 左下角版本号旁会出现「检查更新」按钮：打开面板时会自动检查并提示新版本；点击后自动下载、校验并覆盖插件文件
 - 更新不会覆盖你的 `cordis.patch.yml`；装完需重启 DeepSeek Harness 生效
 
