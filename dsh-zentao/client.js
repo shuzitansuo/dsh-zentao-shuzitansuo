@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.0.2';
+    const PLUGIN_VERSION = 'v0.0.3';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
@@ -2443,6 +2443,22 @@ window.__ModuleLoader__.load({
           );
         }
         if (key === 'module') {
+          if (item.type === 'task') {
+            return h(
+              'td',
+              { key, className: 'zt-col-module' },
+              h(
+                'button',
+                {
+                  className: 'zt-cell-action',
+                  type: 'button',
+                  title: '点击修改所属模块',
+                  onClick: (event) => openCellEditor(item, 'module', event),
+                },
+                h('span', { className: 'zt-cell-text' }, item.moduleName || '未指定模块'),
+              ),
+            );
+          }
           if (item.type !== 'bug') return h('td', { key, className: 'zt-col-module' }, item.moduleName || '—');
           return h(
             'td',
@@ -2476,13 +2492,26 @@ window.__ModuleLoader__.load({
           );
         }
         if (key === 'priority') {
-          return h(
-            'td',
-            { key, className: 'zt-col-priority' },
-            item.priority
-              ? h('span', { className: 'zt-tag zt-tag-' + priorityTone(item.priority) }, 'P' + item.priority)
-              : '—',
-          );
+          const tag = item.priority
+            ? h('span', { className: 'zt-tag zt-tag-' + priorityTone(item.priority) }, 'P' + item.priority)
+            : '—';
+          if (item.type === 'task') {
+            return h(
+              'td',
+              { key, className: 'zt-col-priority' },
+              h(
+                'button',
+                {
+                  className: 'zt-cell-action',
+                  type: 'button',
+                  title: '点击修改优先级',
+                  onClick: (event) => openCellEditor(item, 'priority', event),
+                },
+                tag,
+              ),
+            );
+          }
+          return h('td', { key, className: 'zt-col-priority' }, tag);
         }
         if (key === 'assignee') {
           return h(
@@ -2963,6 +2992,7 @@ window.__ModuleLoader__.load({
           return String(editor.item.assignedTo || '').replace(/^[A-Za-z]:/, '').trim();
         }
         if (editor.field === 'module') return String(editor.item.moduleName || '未指定模块');
+        if (editor.field === 'priority') return editor.item.priority ? 'P' + editor.item.priority : '';
         return editor.item.type === 'bug'
           ? editor.item.resolution || editor.item.statusText
           : editor.item.stage || editor.item.statusText;
@@ -2977,6 +3007,40 @@ window.__ModuleLoader__.load({
           setCellEditor(null);
           setActionError(message);
         };
+        if (item.type === 'task' && field === 'priority') {
+          setCellEditor({
+            item,
+            field,
+            x: rect.left,
+            y: rect.bottom + 6,
+            options: [
+              { value: '1', label: 'P1' },
+              { value: '2', label: 'P2' },
+              { value: '3', label: 'P3' },
+            ],
+            loading: false,
+            busy: false,
+          });
+          return;
+        }
+        if (item.type === 'task' && field === 'module') {
+          api('/zentao/api/task-module-options?id=' + item.id)
+            .then((data) => {
+              if (!data || !data.ok) throw new Error((data && data.error) || '读取模块失败');
+              const modules = data.modules || [];
+              if (!modules.length) throw new Error('没有可用的模块');
+              setCellEditor((prev) =>
+                prev && prev.item === item && prev.field === field
+                  ? Object.assign({}, prev, {
+                      options: modules.map((module) => ({ value: module.value, label: module.label })),
+                      loading: false,
+                    })
+                  : prev,
+              );
+            })
+            .catch((error) => fail(error.message));
+          return;
+        }
         if (item.type === 'task' && field === 'status') {
           api('/zentao/api/task-status-options?id=' + item.id)
             .then((data) => {
@@ -3097,7 +3161,21 @@ window.__ModuleLoader__.load({
         setCellEditor(Object.assign({}, editor, { busy: true }));
         try {
           let result;
-          if (editor.field === 'status' && editor.item.type === 'task') {
+          if (editor.field === 'priority' && editor.item.type === 'task') {
+            result = await api('/zentao/api/task-priority', {
+              method: 'POST',
+              headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+              body: JSON.stringify({ id: editor.item.id, priority: Number(option.value) }),
+            });
+            if (!result.ok) throw new Error(result.error || '优先级修改失败');
+          } else if (editor.field === 'module' && editor.item.type === 'task') {
+            result = await api('/zentao/api/task-module', {
+              method: 'POST',
+              headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+              body: JSON.stringify({ id: editor.item.id, moduleId: Number(option.value) }),
+            });
+            if (!result.ok) throw new Error(result.error || '模块修改失败');
+          } else if (editor.field === 'status' && editor.item.type === 'task') {
             result = await api('/zentao/api/task-status', {
               method: 'POST',
               headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
@@ -4064,7 +4142,9 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'zt-popup-head' },
-              cellEditor.field === 'module'
+              cellEditor.field === 'priority'
+                ? '修改优先级'
+                : cellEditor.field === 'module'
                 ? '修改模块'
                 : cellEditor.field === 'deadline'
                   ? '修改截止日期'
@@ -4472,24 +4552,6 @@ window.__ModuleLoader__.load({
                     updateState.checking ? '检查中…' : '检查更新',
                     updateState.available ? h('span', { className: 'zt-update-dot', 'aria-hidden': true }) : null,
                   ),
-                  h(
-                    'button',
-                    {
-                      className: 'zt-check-update',
-                      type: 'button',
-                      disabled: updateState.checking,
-                      title: '选择本地 zip 更新包，直接安装',
-                      onClick: () => importUpdateInputRef.current && importUpdateInputRef.current.click(),
-                    },
-                    '导入更新包',
-                  ),
-                  h('input', {
-                    ref: importUpdateInputRef,
-                    type: 'file',
-                    accept: '.zip,application/zip',
-                    style: { display: 'none' },
-                    onChange: onImportUpdateSelected,
-                  }),
                 ),
                 h(
                   'button',
@@ -5624,7 +5686,7 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-root *,.zt-root *:before,.zt-root *:after{box-sizing:border-box}
 .zt-pane{display:flex;flex:0 0 auto;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--td-bg-color-container)}
 .zt-left{position:relative;background:var(--dsw-specific-sidebar-fill,var(--td-bg-color-secondarycontainer))}
-.zt-main{position:relative;flex:1 1 0;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:#fff;container-type:inline-size}
+.zt-main{position:relative;flex:1 1 0;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--td-bg-color-container);container-type:inline-size}
 .zt-main-dragstrip{position:absolute;left:0;right:0;top:0;height:14px;z-index:6;-webkit-app-region:drag}
 .zt-split{flex:0 0 8px;width:8px;cursor:col-resize;background:transparent;position:relative;z-index:2}
 .zt-split:after{content:'';position:absolute;left:50%;top:0;bottom:0;width:1px;margin-left:-0.5px;background:var(--td-component-stroke)}
@@ -5796,6 +5858,23 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-cal-week{padding:8px 10px;font-size:12px;font-weight:500;color:var(--td-text-color-placeholder);text-align:center;border-bottom:1px solid var(--td-component-stroke);border-right:1px solid var(--td-component-stroke)}
 .zt-cal-week:nth-child(7){border-right:0}
 .zt-cal-week-weekend{color:var(--td-text-color-placeholder);background:#fafafa}
+body[data-ds-dark-theme] .zt-root .zt-cal-cell,
+body[data-ds-dark-theme] .zt-root .zt-cal-week{background:var(--td-bg-color-container)}
+body[data-ds-dark-theme] .zt-root .zt-cal-weekend,
+body[data-ds-dark-theme] .zt-root .zt-cal-week-weekend{background:#202124}
+body[data-ds-dark-theme] .zt-root .zt-cal-blank{background:#181818}
+body[data-ds-dark-theme] .zt-root .zt-cal-cell:hover,
+body[data-ds-dark-theme] .zt-root .zt-cal-weekend:hover{background:#2a3550}
+body[data-ds-dark-theme] .zt-root .zt-cal-task{background:#253549;color:#a9c7ff}
+body[data-ds-dark-theme] .zt-root .zt-cal-task:hover{background:#2d4262;border-color:var(--td-brand-color)}
+body[data-ds-dark-theme] .zt-root .zt-cal-task-done{background:#2c2c2c;color:rgba(255,255,255,.42)}
+body[data-ds-dark-theme] .zt-root .zt-cal-task-done .zt-cal-task-link{color:rgba(255,255,255,.42)}
+body[data-ds-dark-theme] .zt-root .zt-cal-day-num{color:rgba(255,255,255,.78)}
+body[data-ds-dark-theme] .zt-root .zt-cal-lunar{color:rgba(255,255,255,.44)}
+body[data-ds-dark-theme] .zt-root .zt-cal-lunar-festival{color:#ff8a80}
+body[data-ds-dark-theme] .zt-root .zt-cal-lunar-term{color:#6fdc9e}
+body[data-ds-dark-theme] .zt-root .zt-cal-selected{box-shadow:inset 0 0 0 2px var(--td-brand-color)}
+body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(--td-brand-color);color:#fff}
 .zt-cal-cell{height:104px;min-height:0;padding:6px 8px;border-bottom:1px solid var(--td-component-stroke);border-right:1px solid var(--td-component-stroke);display:flex;flex-direction:column;gap:4px;min-width:0;background:var(--td-bg-color-container);transition:background-color .15s;overflow:hidden;box-sizing:border-box}
 .zt-cal-cell:nth-child(7n){border-right:0}
 .zt-cal-cell:hover{background:var(--td-brand-color-light,#f2f3ff)}
@@ -5824,8 +5903,8 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-cal-task-week{display:flex;align-items:flex-start;gap:6px;white-space:normal;padding:4px 8px}
 .zt-cal-task-week .zt-cal-task-link{flex:1;min-width:0;white-space:normal;word-break:break-all;max-height:32px;overflow:hidden}
 .zt-cal-task-check{width:13px;height:13px;margin:2px 0 0;flex:0 0 auto;accent-color:var(--td-brand-color);cursor:pointer}
-.zt-cal-task-done,.zt-cal-task-done:hover{background:#f2f3f5;border-color:transparent;color:rgba(0,0,0,.4);cursor:default;box-shadow:none}
-.zt-cal-task-done .zt-cal-task-link{color:rgba(0,0,0,.4)}
+.zt-cal-task-done,.zt-cal-task-done:hover{background:var(--td-bg-color-container-hover);border-color:transparent;color:var(--td-text-color-placeholder);cursor:default;box-shadow:none}
+.zt-cal-task-done .zt-cal-task-link{color:var(--td-text-color-placeholder)}
 .zt-cal-task:hover{background:var(--td-brand-color-light, #e3f2fd);border-color:var(--td-brand-color);color:var(--td-text-color-brand)}
 .zt-cal-task:active{cursor:grabbing}
 .zt-modal-dialog{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;max-height:100vh;margin:0;padding:24px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;box-sizing:border-box;overflow:auto}

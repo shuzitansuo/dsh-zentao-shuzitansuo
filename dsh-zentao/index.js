@@ -430,6 +430,43 @@ export function apply(ctx, config = {}) {
       }
     }
 
+    if (method === 'GET' && path === 'task-module-options') {
+      const id = Number(url.searchParams.get('id') || 0);
+      if (!id) return json(res, 400, { ok: false, error: 'id required' });
+      try {
+        const data = await client.taskModuleOptions(id);
+        return json(res, 200, Object.assign({ ok: true }, data));
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'task-priority') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.setTaskPriority(Number(body.id), Number(body.priority));
+        invalidate('items:');
+        invalidate('dashboard');
+        invalidate('my-tasks');
+        return json(res, 200, { ok: true, result });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'task-module') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.setTaskModule(Number(body.id), Number(body.moduleId));
+        invalidate('items:');
+        invalidate('dashboard');
+        invalidate('my-tasks');
+        return json(res, 200, { ok: true, result });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
     if (method === 'GET' && path === 'task-status-options') {
       const id = Number(url.searchParams.get('id') || 0);
       if (!id) return json(res, 400, { ok: false, error: 'id required' });

@@ -2,17 +2,11 @@
     - id: zentao-workbench
       name: '@local/dsh-zentao'
       config:
-        # 你的禅道地址（不要带结尾斜杠）
         baseUrl: 'http://127.0.0.1:8080'
-        # 禅道登录账号 / 密码（只保存在本机，不要提交到仓库）
         account: 'your-account'
         password: 'your-password'
-        # 左树默认只显示进行中的项目/迭代
         showClosed: true
-        # native = 原生会话 + agent tools；custom = 插件自带三栏聊天（默认）
         chatMode: custom
-        # 指派提醒（只读轮询）
         assignmentWatch: true
         assignmentIntervalMs: 60000
-        # 自更新清单地址，例如 https://raw.githubusercontent.com/<user>/<repo>/main/latest.json
-        updateUrl: ''
+        updateUrl: 'https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/latest.json'

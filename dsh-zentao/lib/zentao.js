@@ -825,6 +825,38 @@ export class ZenTaoClient {
     return { ok: true, assignedTo: value };
   }
 
+  /** Module options available to a task (from its edit form). */
+  async taskModuleOptions(taskId) {
+    const html = await this.#page(`/task-edit-${Number(taskId)}.html`);
+    const modules = selectOptions(html, 'module').map((option) => ({
+      value: String(option.value),
+      label: String(option.label || '').replace(/^\/+/, '').trim() || '无',
+    }));
+    return { modules };
+  }
+
+  /** Update a task priority (1 P1 .. 3 P3). */
+  async setTaskPriority(taskId, priority) {
+    const value = Number(priority);
+    if (![1, 2, 3].includes(value)) throw new ZenTaoError('优先级只能是 1/2/3', 'ZT_INPUT');
+    // REST 更新会忽略 pri，这里回放任务编辑表单来改优先级
+    const pagePath = `/task-edit-${Number(taskId)}.html`;
+    const html = await this.#page(pagePath);
+    const form = parseFormFields(html);
+    form.pri = String(value);
+    const res = await this.post(pagePath, form);
+    const parsed = parseFormResponse(res, '修改任务优先级');
+    return Object.assign({ ok: true, priority: value }, parsed);
+  }
+
+  /** Move a task into another module. */
+  async setTaskModule(taskId, moduleId) {
+    const value = Number(moduleId);
+    if (!Number.isFinite(value) || value < 0) throw new ZenTaoError('模块不合法', 'ZT_INPUT');
+    await this.#apiRequest('PUT', `tasks/${Number(taskId)}`, { module: value });
+    return { ok: true, moduleId: value };
+  }
+
   /** Update a task deadline (YYYY-MM-DD). */
   async setTaskDeadline(taskId, deadline) {
     const id = Number(taskId);

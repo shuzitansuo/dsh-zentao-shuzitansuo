@@ -1,5 +1,5 @@
 {
-  "version": "0.0.2",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.0.2.zip",
-  "notes": "首个公开版本：仪表盘、任务日历、图片解析、自更新、指派提醒"
+  "version": "0.0.3",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.0.3.zip",
+  "notes": "任务列表可改优先级/模块；深色日历适配；移除导入更新包"
 }

@@ -2,9 +2,10 @@
 
 把 DeepSeek Harness 和禅道（ZenTao）连起来的三栏工作台：
 
-- 左侧：项目 / 迭代树（排序、搜索、显示已关闭、展开动画）
-- 中间：研发需求 / BUG 列表（状态/阶段、模块、优先级、指派人、行内改状态/指派、列宽列序、只看我）
-- 右侧：DeepSeek 会话（录入需求/BUG、改状态、新增迭代、文档批量建需求、指派提醒、通用只读接口查询）
+- 左侧：项目 / 迭代树（置顶拖拽、展开/收起全部、排序、搜索、显示已关闭）
+- 中间：仪表盘 + 任务日历 + 研发需求 / BUG / 任务 / 测试单 / 测试报告列表（行内改状态/指派/优先级/模块/截止日期、列宽列序、只看我）
+- 右侧：DeepSeek 会话（录入需求/BUG、批量建任务、改状态、新增迭代、文档批量建需求、粘贴图片解析、指派提醒、通用只读接口查询）
+- 自动更新：左下角检查更新 + 版本清单，发现新版本自动下载安装
 
 ## 环境要求
 
@@ -77,7 +78,7 @@
   { "version": "0.0.3", "url": "https://example.com/dsh-zentao-0.0.3.zip",
     "notes": "更新说明", "sha256": "可选的 zip SHA-256" }
   ```
-- 在 `cordis.patch.yml` 配置 `updateUrl: 'https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/latest.json'`
+- 在 `cordis.patch.yml` 配置 `updateUrl: '.../latest.json'`
 - 左下角版本号旁会出现「检查更新」按钮：打开面板时会自动检查并提示新版本；点击后自动下载、校验并覆盖插件文件
 - 更新不会覆盖你的 `cordis.patch.yml`；装完需重启 DeepSeek Harness 生效
 
