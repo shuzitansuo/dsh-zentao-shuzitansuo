@@ -1,5 +1,5 @@
 {
-  "version": "0.0.3",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.0.3.zip",
-  "notes": "任务列表可改优先级/模块；深色日历适配；移除导入更新包"
+  "version": "0.0.4",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.0.4.zip",
+  "notes": "任务列表可改优先级/模块；深色日历适配；更新检查绕过 CDN 缓存"
 }

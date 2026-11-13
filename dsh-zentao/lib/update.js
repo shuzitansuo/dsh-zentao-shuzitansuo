@@ -17,11 +17,15 @@ import zlib from 'node:zlib';
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKIP_PATHS = new Set(['cordis.patch.yml', 'package-lock.json', 'pnpm-lock.yaml']);
 const MAX_ARCHIVE_BYTES = 30 * 1024 * 1024;
-const FETCH_TIMEOUT_MS = 20000;
+const FETCH_TIMEOUT_MS = 30000;
 
 export function parseVersion(value) {
   const match = String(value || '').match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
   return match ? [Number(match[1]) || 0, Number(match[2]) || 0, Number(match[3]) || 0] : [0, 0, 0];
+}
+
+function withCacheBust(url) {
+  return url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
 }
 
 export function compareVersions(a, b) {
@@ -59,7 +63,7 @@ export async function checkForUpdate({ updateUrl } = {}) {
   if (!url) throw new Error('未配置更新地址（请在插件配置中设置 updateUrl）');
   let manifest;
   try {
-    const res = await fetchText(url);
+    const res = await fetchText(withCacheBust(url));
     manifest = await res.json();
   } catch (error) {
     throw new Error('检查更新失败：' + (error && error.message ? error.message : String(error)));
@@ -169,7 +173,7 @@ export async function applyUpdateBuffer(buffer, { sha256 } = {}) {
 export async function applyUpdate({ downloadUrl, sha256 } = {}) {
   const url = String(downloadUrl || '').trim();
   if (!url) throw new Error('缺少更新包地址');
-  const res = await fetchText(url);
+  const res = await fetchText(withCacheBust(url));
   const buffer = Buffer.from(await res.arrayBuffer());
   return await applyUpdateBuffer(buffer, { sha256 });
 }
