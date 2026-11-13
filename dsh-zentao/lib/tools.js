@@ -300,7 +300,7 @@ export function createZenTaoTools(deps) {
       properties: {
         kind: { type: 'string', enum: ['story', 'bug'], description: 'story or bug.' },
         id: { type: 'integer', description: 'ZenTao story/bug id.' },
-        assignedTo: { type: 'string', description: 'ZenTao account, e.g. zhangsan.' },
+        assignedTo: { type: 'string', description: 'ZenTao account, e.g. zml.' },
       },
       required: ['kind', 'id', 'assignedTo'],
       additionalProperties: false,

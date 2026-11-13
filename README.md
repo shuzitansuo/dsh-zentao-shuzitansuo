@@ -19,11 +19,10 @@
 
 ### 方式一：一键脚本（推荐）
 
-1. 把本仓库 clone 到一个**固定位置**（后续升级 `git pull`，不要放在下载目录里随时删），例如：
+1. 把本目录放到一个**固定位置**（后续升级直接替换，不要放在下载目录里随时删），例如：
    ```bash
-   git clone https://github.com/shuzitansuo/dsh-zentao-shuzitansuo.git ~/dsh-zentao-share
+   mv dsh-zentao-share ~/dsh-zentao-share
    ```
-   已经拿到分享包的，也可以直接把分享包目录移到这个固定位置。
 2. 运行安装脚本（默认写入 `~/.dsh/profiles/desktop`；如果你的 profile 叫 web，可传参）：
    ```bash
    cd ~/dsh-zentao-share
@@ -69,11 +68,23 @@
 | `chatMode` | `custom` | `custom` = 插件自带三栏聊天；`native` = 用 DeepSeek 原生会话 + agent 工具驱动禅道 |
 | `assignmentWatch` | `true` | 是否轮询「我的 Bug/需求」做指派提醒（只读） |
 | `assignmentIntervalMs` | `60000` | 指派提醒轮询间隔（毫秒） |
+| `updateUrl` | 空 | 更新清单 JSON 地址，例如 `https://example.com/dsh-zentao/latest.json`；留空则「检查更新」提示未配置 |
+
+## 更新机制
+
+- 把新版插件打成 zip 上传，并提供一个清单 JSON：
+  ```json
+  { "version": "0.0.3", "url": "https://example.com/dsh-zentao-0.0.3.zip",
+    "notes": "更新说明", "sha256": "可选的 zip SHA-256" }
+  ```
+- 在 `cordis.patch.yml` 配置 `updateUrl: '.../latest.json'`
+- 左下角版本号旁会出现「检查更新」按钮：打开面板时会自动检查并提示新版本；点击后自动下载、校验并覆盖插件文件
+- 更新不会覆盖你的 `cordis.patch.yml`；装完需重启 DeepSeek Harness 生效
 
 ## 升级
 
-- 本仓库是 `link:` 安装，更新代码后重启 DeepSeek Harness 即可；通常不用重新 `pnpm install`。
-- 用 git 管理时，本地 `cordis.patch.yml` 已填了自己的禅道账号，升级前先 `git stash`，`git pull` 后再 `git stash pop`。
+- 用新版 `dsh-zentao` 文件夹覆盖旧文件夹（保留你自己的 `cordis.patch.yml` 配置）。
+- 因为是 `link:` 安装，通常不用重新 `pnpm install`；重启 DeepSeek Harness 即可。
 - 如果新增/删除了依赖文件，进入 profile 目录重新 `pnpm install`。
 
 ## 卸载
@@ -87,22 +98,6 @@
 - `cordis.patch.yml` 里会保存禅道账号密码，**不要**把它提交到公开仓库或发给别人；分享插件时请保持占位符。
 - 本插件对禅道的写入操作（建需求/BUG/迭代、改状态、指派）都走禅道原有权限校验，不会绕过禅道权限。
 - 「通用接口查询」第一版是只读的，不会修改禅道数据。
-
-## 目录结构
-
-```text
-dsh-zentao-share/
-├── README.md
-├── install.sh              # 一键注册到 DSH profile 并执行 pnpm install
-└── dsh-zentao/             # 插件包（@local/dsh-zentao）
-    ├── package.json        # 声明 bundle patch 和 web client
-    ├── cordis.patch.yml    # 插件注册 + 配置（填自己的禅道账号，不要提交真实值）
-    ├── index.js            # 宿主端：禅道 HTTP、API 路由、agent tools
-    ├── client.js           # 前端：三栏工作台 UI
-    ├── lib/                # 禅道接口、聊天、录入、指派提醒等
-    ├── locale/             # 中英文文案
-    └── icon.svg
-```
 
 ## 常见问题
 

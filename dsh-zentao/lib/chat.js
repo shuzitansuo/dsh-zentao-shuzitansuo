@@ -15,6 +15,7 @@ export function createChatEngine(deps) {
   const usageRank = typeof deps.usageRank === 'function' ? deps.usageRank : null;
   const zentaoApi = deps.zentaoApi || null;
   const createItem = typeof deps.createItem === 'function' ? deps.createItem : null;
+  const createTask = typeof deps.createTask === 'function' ? deps.createTask : null;
   const createExecution = typeof deps.createExecution === 'function' ? deps.createExecution : null;
   const changeStatus = typeof deps.changeStatus === 'function' ? deps.changeStatus : null;
 
@@ -57,7 +58,17 @@ export function createChatEngine(deps) {
     return text;
   }
 
-  async function stream(system, prompt, emit, { temperature = 0.6, maxTokens = 1500 } = {}) {
+  function contentWithImages(prompt, images) {
+    const content = [{ type: 'text', text: prompt }];
+    for (const image of images || []) {
+      if (image && image.mimeType && image.data) {
+        content.push({ type: 'image', mimeType: image.mimeType, data: image.data });
+      }
+    }
+    return content;
+  }
+
+  async function stream(system, prompt, emit, { temperature = 0.6, maxTokens = 1500, images = [] } = {}) {
     const route = await model();
     const chunks = route.llm.stream({
       provider: route.provider,
@@ -65,7 +76,7 @@ export function createChatEngine(deps) {
       system,
       temperature,
       maxTokens,
-      messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+      messages: [{ role: 'user', content: contentWithImages(prompt, images) }],
     });
     let text = '';
     for await (const chunk of chunks) {
@@ -135,6 +146,12 @@ export function createChatEngine(deps) {
     }
     const st = stateOf(convId);
     const text = String(input.text || '').trim();
+    const images = Array.isArray(input.images)
+      ? input.images
+          .filter((item) => item && item.mimeType && item.data)
+          .slice(0, 4)
+          .map((item) => ({ mimeType: String(item.mimeType), data: String(item.data) }))
+      : [];
     const action = input.action || null;
     const edit = input.edit && typeof input.edit === 'object' ? input.edit : null;
     const contexts = Array.isArray(input.contexts) ? input.contexts : [];
@@ -142,6 +159,9 @@ export function createChatEngine(deps) {
     st.history.push({ role: 'user', text: text || (action && action.value) || '' });
 
     try {
+      if (images.length) {
+        return await answerImages(st, text, images, selection, emit);
+      }
       if (action && action.type === 'quick') {
         await startFlow(st, action.value, text, selection, emit, {
           docItems: Array.isArray(input.docItems) ? input.docItems : null,
@@ -171,6 +191,12 @@ export function createChatEngine(deps) {
       /(bug|缺陷|问题单).{0,6}(加入|添加|新增|新建|创建|录入)/i.test(text)
     ) {
       return 'bug';
+    }
+    if (
+      /(创建|新增|新建|添加|增加|加入|安排|录入|加).{0,6}(任务|task)/i.test(text) ||
+      /(任务|task).{0,6}(创建|新增|添加|增加|安排)/i.test(text)
+    ) {
+      return 'task';
     }
     if (
       /(加入|添加|新增|新建|创建|录入|提|报|记|加).{0,6}(需求|story)/i.test(text) ||
@@ -225,6 +251,12 @@ export function createChatEngine(deps) {
         return await applyTarget(st, target, emit);
       }
       return await askTarget(st, emit);
+    }
+    if (flow === 'task') {
+      st.flow = 'task';
+      st.step = 'parse';
+      st.data = { selection, contexts: [], tasks: [] };
+      return await startTaskFlow(st, text, selection, emit);
     }
     if (flow === 'execution') {
       st.flow = 'execution';
@@ -411,7 +443,7 @@ export function createChatEngine(deps) {
     emit({ type: 'status', text: '正在读取项目/迭代…' });
     const targets = await loadTargets();
     st.data.targets = targets;
-    const kind = st.flow === 'bug' ? 'BUG' : '研发需求';
+    const kind = st.flow === 'task' ? '任务' : st.flow === 'bug' ? 'BUG' : '研发需求';
     if (!targets.length) {
       say(emit, '没有读到可用的项目/迭代，请先在左侧选择一个迭代，或确认你的禅道账号有项目权限。');
       cancelFlow(st, emit);
@@ -439,7 +471,7 @@ export function createChatEngine(deps) {
 
   async function showTargetPicker(st, emit, kindArg) {
     const targets = st.data.targets || [];
-    const kind = kindArg || (st.flow === 'bug' ? 'BUG' : '研发需求');
+    const kind = kindArg || (st.flow === 'task' ? '任务' : st.flow === 'bug' ? 'BUG' : '研发需求');
     const current = st.data.currentTarget || null;
     const currentExec = current ? current.executionId : 0;
     // Closed iterations are not writable targets; never list them.
@@ -459,7 +491,7 @@ export function createChatEngine(deps) {
     const ranked = await rankTargets(others);
     const visible = ranked.items.slice(0, 10);
     st.data.targets = visible;
-    say(emit, `请选择要写入的其他项目/迭代${ranked.frequent.size ? '（常用的排在最前面）' : ''}：`);
+    say(emit, `请选择要写入的${current ? '其他' : ''}项目/迭代${ranked.frequent.size ? '（常用的排在最前面）' : ''}：`);
     choices(
       emit,
       'target',
@@ -504,6 +536,22 @@ export function createChatEngine(deps) {
     const pending = st.data.pendingText || '';
     st.data.pendingText = '';
     say(emit, `已选择「${target.projectName} / ${target.executionName}」。`);
+    if (st.flow === 'task') {
+      st.data.target = {
+        executionId: target.executionId,
+        executionName: target.executionName,
+        projectId: target.projectId,
+      };
+      const pendingTasks = pending;
+      if (!pendingTasks) {
+        st.step = 'task-input';
+        say(emit, '请描述要新增的任务，可以一次写多条。');
+        return;
+      }
+      st.step = 'parse';
+      st.data.tasks = await parseTasksFromText(pendingTasks, st.data.selection, st.data.target, emit);
+      return await continueTaskFlow(st, emit);
+    }
     if (st.flow === 'doc') {
       return await showDocPlan(st, target, emit);
     }
@@ -908,6 +956,322 @@ export function createChatEngine(deps) {
     st.flow = null;
     st.step = null;
     st.data = {};
+  }
+
+  // ---------- task creation ----------
+
+  function taskTargetFromSelection(selection) {
+    const ctxs = Array.isArray(selection && selection.contexts) ? selection.contexts : [];
+    const ctx = ctxs.find((item) => item && item.type === 'execution' && item.id);
+    if (ctx) {
+      return {
+        executionId: Number(ctx.id),
+        executionName: String(ctx.title || ''),
+        projectId: Number(ctx.projectId) || Number(selection.projectId) || 0,
+      };
+    }
+    return null;
+  }
+
+  function normalizeTaskDeadlineText(text) {
+    const value = String(text || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    const now = new Date();
+    const iso = (date) =>
+      date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+    const addDays = (days) => {
+      const date = new Date(now);
+      date.setDate(now.getDate() + days);
+      return iso(date);
+    };
+    if (/今天|今日/.test(value)) return addDays(0);
+    if (/明天|明日/.test(value)) return addDays(1);
+    if (/后天/.test(value)) return addDays(2);
+    if (/本周日|这周日|周日|星期日|星期天/.test(value)) {
+      const offset = (7 - ((now.getDay() + 6) % 7)) % 7;
+      return addDays(offset);
+    }
+    const weekday = value.match(/(?:本|这)?周([一二三四五六日天])/);
+    if (weekday) {
+      const map = { 一: 0, 二: 1, 三: 2, 四: 3, 五: 4, 六: 5, 日: 6, 天: 6 };
+      const target = map[weekday[1]];
+      if (target !== undefined) {
+        const current = (now.getDay() + 6) % 7;
+        return addDays(target - current);
+      }
+    }
+    if (/下周/.test(value)) return '';
+    return '';
+  }
+
+  function normalizeTaskPriority(value, fallbackText) {
+    const raw = String(value || '').trim();
+    if (/^[123]$/.test(raw)) return Number(raw);
+    const matched = raw.match(/p\s*([123])/i) || String(fallbackText || '').match(/p\s*([123])/i);
+    if (matched) return Number(matched[1]);
+    if (/紧急|最高|高优|加急/.test(raw)) return 1;
+    if (/低优|不急|较低/.test(raw)) return 3;
+    return 3;
+  }
+
+  function matchTaskMember(members, text) {
+    const value = String(text || '').trim();
+    if (!value) return '';
+    const exact = members.find((member) => member.label === value || member.value === value);
+    if (exact) return exact.value;
+    const fuzzy = members.find((member) => member.label.includes(value) || value.includes(member.label));
+    if (fuzzy) return fuzzy.value;
+    return '';
+  }
+
+  async function parseTasksFromText(text, selection, target, emit) {
+    const prompt =
+      selectionBlock(selection) +
+      '\n\n目标迭代：' + target.executionName + '（#' + target.executionId + '）' +
+      '\n\n用户描述：\n' + text;
+    let data = null;
+    try {
+      data = await askJson(
+        '你是禅道任务拆解助手。把用户描述拆成一条或多条任务，输出 JSON：' +
+          '{"tasks":[{"title":"任务标题","assignedTo":"指派人姓名或账号，没提到则为空字符串","deadline":"YYYY-MM-DD，没提到则为空字符串","priority":"1/2/3，没提到则为空字符串"}]}。' +
+          '不要编造用户没说的标题/指派人/日期；标题要简短明确。只输出 JSON。',
+        prompt,
+      );
+    } catch (error) {
+      data = null;
+    }
+    let tasks = data && Array.isArray(data.tasks) ? data.tasks : [];
+    tasks = tasks
+      .map((item) => ({
+        title: String((item && item.title) || '').trim().slice(0, 100),
+        assignedTo: String((item && item.assignedTo) || '').trim(),
+        deadline: normalizeTaskDeadlineText((item && item.deadline) || ''),
+        priority: normalizeTaskPriority(item && item.priority, (item && item.title) || ''),
+      }))
+      .filter((item) => item.title);
+    if (!tasks.length) {
+      const lines = String(text || '')
+        .split(/[\n；;]+/)
+        .map((line) => line.replace(/^[\s\-*•·\d.、)）]+/, '').trim())
+        .filter(Boolean);
+      const source = lines.length ? lines : [String(text || '').trim()];
+      tasks = source
+        .filter(Boolean)
+        .slice(0, 20)
+        .map((title) => ({ title: title.slice(0, 100), assignedTo: '', deadline: '', priority: normalizeTaskPriority('', title) }));
+    }
+    return tasks.slice(0, 20);
+  }
+
+  async function askTaskAssignee(st, emit) {
+    st.step = 'task-assignee';
+    const target = st.data.target;
+    let members = [];
+    try {
+      members = await zt.executionMembers(target.executionId);
+    } catch (error) {
+      members = [];
+    }
+    st.data.members = Array.isArray(members) ? members : [];
+    const missing = st.data.tasks.filter((task) => !task.assignedTo);
+    say(emit, '需要给 ' + missing.length + ' 个任务指定指派人。' + (st.data.members.length ? '请选择或回复成员姓名：' : '请回复指派人账号：'));
+    if (st.data.members.length) {
+      choices(
+        emit,
+        'task-assignee',
+        st.data.members.slice(0, 24).map((member, index) => ({ value: 'user:' + member.value, label: member.label, tone: index === 0 ? 'primary' : undefined })).concat([{ value: 'cancel', label: '取消' }]),
+      );
+    }
+  }
+
+  async function askTaskDeadline(st, emit) {
+    st.step = 'task-deadline';
+    const missing = st.data.tasks.filter((task) => !task.deadline);
+    say(emit, '请给出 ' + missing.length + ' 个任务的截止日期（也可以回复「明天」「本周五」这样的说法，或「取消」）。');
+    const today = new Date();
+    const iso = (date) =>
+      date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    const sunday = new Date(today);
+    sunday.setDate(today.getDate() + ((7 - ((today.getDay() + 6) % 7)) % 7));
+    choices(emit, 'task-deadline', [
+      { value: 'date:' + iso(today), label: '今天（' + iso(today) + '）' },
+      { value: 'date:' + iso(tomorrow), label: '明天（' + iso(tomorrow) + '）' },
+      { value: 'date:' + iso(sunday), label: '本周日（' + iso(sunday) + '）' },
+      { value: 'cancel', label: '取消' },
+    ]);
+  }
+
+  async function continueTaskFlow(st, emit) {
+    let tasks = st.data.tasks || [];
+    // 把模型/用户给的姓名映射成禅道账号；映射不到就当作缺失后再问
+    if (!Array.isArray(st.data.members)) {
+      try {
+        st.data.members = await zt.executionMembers(st.data.target.executionId);
+      } catch (error) {
+        st.data.members = [];
+      }
+    }
+    tasks = tasks.map((task) => {
+      if (!task.assignedTo) return task;
+      const matched = matchTaskMember(st.data.members, task.assignedTo);
+      const account =
+        matched || (/^[A-Za-z][A-Za-z0-9._-]*$/.test(task.assignedTo) ? task.assignedTo : '');
+      return Object.assign({}, task, { assignedTo: account });
+    });
+    st.data.tasks = tasks;
+    if (!tasks.length) {
+      st.step = 'task-input';
+      say(emit, '请描述要新增的任务，可以一次写多条。');
+      return;
+    }
+    if (tasks.some((task) => !task.assignedTo)) return await askTaskAssignee(st, emit);
+    if (tasks.some((task) => !task.deadline)) return await askTaskDeadline(st, emit);
+    return await sendTaskPlan(st, emit);
+  }
+
+  async function startTaskFlow(st, text, selection, emit) {
+    const target = taskTargetFromSelection(selection);
+    st.data.selection = selection;
+    if (!target) {
+      // 没有拖入迭代时，先让用户选择新建在哪个迭代下
+      st.data.pendingText = text || '';
+      st.data.selection = {};
+      st.step = 'target';
+      emit({ type: 'status', text: '正在读取项目/迭代…' });
+      const targets = await loadTargets();
+      st.data.targets = targets;
+      if (!targets.length) {
+        say(emit, '没有读到可用的项目/迭代，请确认你的禅道账号有项目权限，或把左侧迭代拖进对话框。');
+        st.flow = null;
+        st.step = null;
+        st.data = {};
+        return;
+      }
+      return await showTargetPicker(st, emit);
+    }
+    st.data.target = target;
+    if (!text) {
+      st.step = 'task-input';
+      say(emit, '请描述要新增的任务，可以一次写多条。');
+      return;
+    }
+    const tasks = await parseTasksFromText(text, selection, target, emit);
+    st.data.tasks = tasks;
+    return await continueTaskFlow(st, emit);
+  }
+
+  async function sendTaskPlan(st, emit) {
+    st.step = 'task-confirm';
+    const target = st.data.target;
+    const tasks = st.data.tasks;
+    say(emit, '将在迭代「' + target.executionName + '」下创建 ' + tasks.length + ' 个任务：');
+    card(emit, 'task-plan', {
+      executionName: target.executionName,
+      tasks: tasks.map((task) => ({ title: task.title, assignedTo: task.assignedTo, deadline: task.deadline, priority: task.priority || 3 })),
+    });
+    choices(emit, 'task-confirm', [
+      { value: 'push', label: '推送', tone: 'primary' },
+      { value: 'cancel', label: '取消' },
+    ]);
+  }
+
+  async function submitTaskPlan(st, emit) {
+    if (!createTask) {
+      say(emit, '当前环境不支持创建任务。');
+      st.flow = null;
+      st.step = null;
+      st.data = {};
+      return;
+    }
+    const target = st.data.target;
+    const tasks = st.data.tasks;
+    const results = [];
+    for (const task of tasks) {
+      emit({ type: 'status', text: '正在创建任务：' + task.title });
+      try {
+        const result = await createTask({
+          title: task.title,
+          description: '',
+          assignedTo: task.assignedTo,
+          deadline: task.deadline,
+          priority: task.priority || 3,
+          executionId: target.executionId,
+          projectId: target.projectId,
+        });
+        results.push({ title: task.title, ok: true, id: result && result.id, url: result && result.url });
+      } catch (error) {
+        results.push({ title: task.title, ok: false, error: error && error.message ? error.message : String(error) });
+      }
+    }
+    const okCount = results.filter((item) => item.ok).length;
+    say(emit, '批量创建完成：成功 ' + okCount + ' 条，失败 ' + (results.length - okCount) + ' 条。');
+    card(emit, 'task-result', {
+      executionName: target.executionName,
+      items: results,
+      okCount,
+      total: results.length,
+    });
+    st.flow = null;
+    st.step = null;
+    st.data = {};
+  }
+
+  async function handleTaskStep(st, ctx, emit) {
+    const action = ctx.action;
+    const text = String(ctx.text || '').trim();
+    if (st.step === 'task-input') {
+      if (/取消|关闭/.test(text)) return cancelFlow(st, emit);
+      if (!text) return say(emit, '请描述要新增的任务，可以一次写多条。');
+      const tasks = await parseTasksFromText(text, st.data.selection, st.data.target, emit);
+      st.data.tasks = tasks;
+      return await continueTaskFlow(st, emit);
+    }
+    if (st.step === 'task-assignee') {
+      if (action && action.type === 'choice') {
+        if (action.value === 'cancel') return cancelFlow(st, emit);
+        if (String(action.value).indexOf('user:') === 0) {
+          const account = String(action.value).slice(5);
+          st.data.tasks = st.data.tasks.map((task) => (task.assignedTo ? task : Object.assign({}, task, { assignedTo: account })));
+          return await continueTaskFlow(st, emit);
+        }
+      }
+      if (/取消|关闭/.test(text)) return cancelFlow(st, emit);
+      const account = matchTaskMember(st.data.members || [], text);
+      const value = account || (/^[A-Za-z][A-Za-z0-9._-]*$/.test(text) ? text : '');
+      if (!value) return say(emit, '没有匹配到成员，请回复成员姓名/账号，或回复「取消」。');
+      st.data.tasks = st.data.tasks.map((task) => (task.assignedTo ? task : Object.assign({}, task, { assignedTo: value })));
+      return await continueTaskFlow(st, emit);
+    }
+    if (st.step === 'task-deadline') {
+      if (action && action.type === 'choice') {
+        if (action.value === 'cancel') return cancelFlow(st, emit);
+        if (String(action.value).indexOf('date:') === 0) {
+          const deadline = String(action.value).slice(5);
+          st.data.tasks = st.data.tasks.map((task) => (task.deadline ? task : Object.assign({}, task, { deadline })));
+          return await continueTaskFlow(st, emit);
+        }
+      }
+      if (/取消|关闭/.test(text)) return cancelFlow(st, emit);
+      const deadline = normalizeTaskDeadlineText(text);
+      if (!deadline) return say(emit, '请回复日期（如 2026-11-20），或直接选择建议日期。');
+      st.data.tasks = st.data.tasks.map((task) => (task.deadline ? task : Object.assign({}, task, { deadline })));
+      return await continueTaskFlow(st, emit);
+    }
+    if (st.step === 'task-confirm') {
+      const pick =
+        action && action.type === 'choice'
+          ? action.value
+          : /取消|关闭/.test(text)
+            ? 'cancel'
+            : /^(推送|创建|确认|好|是|嗯)/.test(text)
+              ? 'push'
+              : null;
+      if (pick === 'push') return await submitTaskPlan(st, emit);
+      if (pick === 'cancel') return cancelFlow(st, emit);
+      return say(emit, '请选择「推送」或「取消」。');
+    }
   }
 
   // ---------- testcase ----------
@@ -1439,6 +1803,9 @@ export function createChatEngine(deps) {
       }
     }
     if (st2.step === 'target') return await handleTargetStep(st2, ctx, emit);
+    if (st2.flow === 'task') {
+      return await handleTaskStep(st2, ctx, emit);
+    }
     if (st2.flow === 'story') {
       if (st2.step === 'desc') {
         if (!text) return say(emit, '请先描述一下需求内容。');
@@ -2105,6 +2472,24 @@ export function createChatEngine(deps) {
       : '';
     say(emit, `查询完成，共 ${result.total} 条${scopeNote}${result.total > result.items.length ? '，下面展示前 ' + result.items.length + ' 条' : ''}。`);
     card(emit, 'api-result', { label: result.entry.label, total: result.total, items: result.items, path: result.path });
+  }
+
+  async function answerImages(st, text, images, selection, emit) {
+    emit({ type: 'status', text: '正在分析图片…' });
+    const prompt =
+      selectionBlock(selection || {}) +
+      '\n\n' +
+      (text ? '用户说：' + text + '\n\n' : '') +
+      '请结合图片内容回答用户；如果用户没有额外说明，就描述图片里的关键信息。';
+    try {
+      await stream('你是一个能阅读图片的助手。请准确理解图片内容，并在需要时结合禅道工作台上下文回答。', prompt, emit, {
+        temperature: 0.4,
+        maxTokens: 2000,
+        images,
+      });
+    } catch (error) {
+      say(emit, '图片解析失败：' + (error && error.message ? error.message : String(error)) + '。请确认当前模型支持图片输入。');
+    }
   }
 
   async function general(st, text, contexts, selection, emit) {

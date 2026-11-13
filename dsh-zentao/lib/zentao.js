@@ -113,6 +113,36 @@ function codeForName(name) {
   return slug || 'exec-' + todayIso().replace(/-/g, '');
 }
 
+/** ZenTao task status labels. */
+const TASK_STATUS_TEXT = {
+  wait: '未开始',
+  doing: '进行中',
+  done: '已完成',
+  pause: '已暂停',
+  cancel: '已取消',
+  closed: '已关闭',
+};
+
+/** Form fields of a ZenTao HTML form page, keyed by input name. */
+function parseFormFields(html) {
+  const fields = {};
+  for (const match of String(html || '').matchAll(/<input([^>]*)>/gi)) {
+    const name = attrValue(match[1], 'name');
+    if (!name || /^(submit|reset|button)$/i.test(attrValue(match[1], 'type'))) continue;
+    const type = attrValue(match[1], 'type').toLowerCase();
+    if (type === 'file' || type === 'checkbox' || type === 'radio') continue;
+    fields[name] = attrValue(match[1], 'value');
+  }
+  for (const match of String(html || '').matchAll(/<textarea[^>]*name=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/textarea>/gi)) {
+    fields[match[1]] = decodeEntities(stripHtml(match[2])).trim();
+  }
+  for (const match of String(html || '').matchAll(/<select[^>]*name=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/select>/gi)) {
+    const selected = [...match[2].matchAll(/<option([^>]*)>([\s\S]*?)<\/option>/gi)].find((option) => /selected/i.test(option[1])) || [...match[2].matchAll(/<option([^>]*)>([\s\S]*?)<\/option>/gi)][0];
+    if (selected) fields[match[1]] = attrValue(selected[1], 'value');
+  }
+  return fields;
+}
+
 /** Options of one <select name=...> on a ZenTao form page. */
 function selectOptions(html, name) {
   const re = new RegExp(`<select[^>]*name=['"]${name}['"][^>]*>([\\s\\S]*?)<\\/select>`, 'i');
@@ -223,6 +253,10 @@ export class ZenTaoClient {
     this.loggedInAt = 0;
     // item id -> { name, at } for the 所属模块 enrichment cache
     this.moduleCache = new Map();
+    // REST API token (writes need it; reads fall back to the session cookie)
+    this.apiToken = '';
+    this.apiTokenAt = 0;
+    this.taskCache = new Map();
     // ZenTao's execution-team page links to numeric user ids, while creation
     // forms expect account strings. Cache the id -> account resolution.
     this.userAccountCache = new Map();
@@ -513,6 +547,481 @@ export class ZenTaoClient {
     }
     await this.#enrichModules('bug', out);
     return out;
+  }
+
+  /** ZenTao REST API v1 with token auth (needed for writes). */
+  async #apiToken(force = false) {
+    if (!force && this.apiToken && Date.now() - this.apiTokenAt < 20 * 60 * 1000) return this.apiToken;
+    const res = await this.request('/api.php/v1/tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: this.account, password: this.password }),
+    });
+    if (res.status >= 400) throw new ZenTaoError(`获取禅道 API token 失败 HTTP ${res.status}`, 'ZT_API');
+    let data = {};
+    try {
+      data = JSON.parse(res.text);
+    } catch (error) {
+      data = {};
+    }
+    if (!data.token) throw new ZenTaoError('禅道没有返回 API token', 'ZT_API');
+    this.apiToken = data.token;
+    this.apiTokenAt = Date.now();
+    return this.apiToken;
+  }
+
+  async #apiRequest(method, path, body, retry = true) {
+    const token = await this.#apiToken(false);
+    const res = await this.request('/api.php/v1/' + String(path).replace(/^\/+/, ''), {
+      method,
+      headers: Object.assign({ 'content-type': 'application/json', Token: token }, body === undefined ? {} : {}),
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (res.status === 401 && retry) {
+      this.apiToken = '';
+      this.apiTokenAt = 0;
+      return this.#apiRequest(method, path, body, false);
+    }
+    if (res.status >= 400) {
+      throw new ZenTaoError(`禅道接口请求失败 HTTP ${res.status}: ${res.text.slice(0, 200)}`, 'ZT_API');
+    }
+    try {
+      return JSON.parse(res.text);
+    } catch (error) {
+      return res.text;
+    }
+  }
+
+  /** Tasks of one iteration (REST v1). */
+  async tasks(executionId) {
+    const id = Number(executionId) || 0;
+    if (!id) return [];
+    const data = await this.#apiRequest('GET', `executions/${id}/tasks`);
+    const list = Array.isArray(data.tasks) ? data.tasks : [];
+    // 任务接口只返回 module id；从任务编辑页的模块下拉里取一次 id→名称映射
+    const moduleNames = new Map();
+    const sample = list.find((task) => Number(task.module) > 0);
+    if (sample) {
+      try {
+        const cacheKey = 'modules:' + id;
+        const cached = this.taskCache.get(cacheKey);
+        if (cached && Date.now() - cached.at < 5 * 60 * 1000) {
+          for (const [key, value] of cached.value) moduleNames.set(key, value);
+        } else {
+          const html = await this.#page(`/task-edit-${sample.id}.html`);
+          for (const option of selectOptions(html, 'module')) {
+            const moduleId = Number(option.value);
+            if (moduleId > 0) moduleNames.set(moduleId, String(option.label || '').replace(/^\/+/, '').trim());
+          }
+          this.taskCache.set(cacheKey, { at: Date.now(), value: moduleNames });
+        }
+      } catch (error) {
+        /* module names are optional */
+      }
+    }
+    return list.map((task) => ({
+      id: task.id,
+      type: 'task',
+      title: task.name || '',
+      moduleName: moduleNames.get(Number(task.module)) || '',
+      priority: task.pri || '',
+      status: task.status || '',
+      statusText: TASK_STATUS_TEXT[task.status] || task.status || '',
+      assignedTo: task.assignedTo?.realname || task.assignedToRealName || '',
+      assignedToAccount: task.assignedTo?.account || '',
+      deadline: task.deadline || '',
+      estimate: task.estimate || 0,
+      consumed: task.consumed || 0,
+      left: task.left || 0,
+      execution: task.execution || id,
+      url: `/task-view-${task.id}.html`,
+    }));
+  }
+
+  /** Test tasks (测试单) of one iteration. */
+  async testTasks(executionId) {
+    const id = Number(executionId) || 0;
+    if (!id) return [];
+    const data = await this.#apiRequest('GET', 'testtasks');
+    const list = (Array.isArray(data.testtasks) ? data.testtasks : []).filter((item) => Number(item.execution) === id);
+    return list.map((item) => ({
+      id: item.id,
+      type: 'testtask',
+      title: item.name || '',
+      status: item.status || '',
+      statusText: TASK_STATUS_TEXT[item.status] || item.status || '',
+      owner: item.owner?.realname || '',
+      ownerAccount: item.owner?.account || '',
+      begin: item.begin || '',
+      end: item.end || '',
+      reportId: Number(item.testreport) || 0,
+      url: `/testtask-view-${item.id}.html`,
+    }));
+  }
+
+  /** Test reports linked to the iteration's test tasks. */
+  async testReports(executionId) {
+    const id = Number(executionId) || 0;
+    if (!id) return [];
+    const cachedReports = this.taskCache.get('reports:' + id);
+    if (cachedReports && Date.now() - cachedReports.at < 5 * 60 * 1000) return cachedReports.value;
+    const tasks = await this.testTasks(id);
+    const ids = [...new Set(tasks.map((task) => task.reportId).filter(Boolean))];
+    const reports = await Promise.all(
+      ids.map(async (reportId) => {
+        let title = '';
+        let date = '';
+        try {
+          const html = await this.#page(`/testreport-view-${reportId}.html`);
+          title = stripHtml((html.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '')
+            .replace(/\s*-\s*禅道\s*$/, '')
+            .replace(/^\d{4}-\d{2}-\d{2}\s+/, '')
+            .replace(/^TESTTASK#\d+\s*/i, '')
+            .replace(/\s*测试报告\s*$/, '')
+            .trim();
+          date = (html.match(/(\d{4}-\d{2}-\d{2})/) || [])[1] || '';
+        } catch (error) {
+          title = '';
+        }
+        const linked = tasks.filter((task) => task.reportId === reportId).map((task) => task.title).join('、');
+        return {
+          id: reportId,
+          type: 'report',
+          title: title || '测试报告 #' + reportId,
+          testtaskName: linked,
+          date,
+          url: `/testreport-view-${reportId}.html`,
+        };
+      }),
+    );
+    this.taskCache.set('reports:' + id, { at: Date.now(), value: reports });
+    return reports;
+  }
+
+  /** One task detail (REST). */
+  async taskDetail(taskId) {
+    return await this.#apiRequest('GET', `tasks/${Number(taskId)}`);
+  }
+
+  /** Action links available on a task detail page. */
+  async taskActions(taskId) {
+    const id = Number(taskId);
+    const html = await this.#page(`/task-view-${id}.html`);
+    const found = [...html.matchAll(new RegExp(`task-(start|finish|close|cancel|pause|restart|activate)-${id}\\.html`, 'gi'))].map(
+      (match) => match[1].toLowerCase(),
+    );
+    return [...new Set(found)];
+  }
+
+  /** Allowed target statuses for a task, derived from its available actions. */
+  async taskStatusOptions(taskId) {
+    const task = await this.taskDetail(taskId);
+    const actions = await this.taskActions(taskId).catch(() => []);
+    const allowed = [];
+    const has = (action) => actions.includes(action);
+    if (has('start') || has('restart') || has('activate')) allowed.push('doing');
+    if (has('pause')) allowed.push('pause');
+    if (has('finish')) allowed.push('done');
+    if (has('cancel')) allowed.push('cancel');
+    if (has('close')) allowed.push('closed');
+    return {
+      current: task.status,
+      currentText: TASK_STATUS_TEXT[task.status] || task.status,
+      options: allowed.map((key) => ({ key, label: TASK_STATUS_TEXT[key] || key })),
+    };
+  }
+
+  /** Assignable members for one task. */
+  async taskAssignOptions(taskId) {
+    const task = await this.taskDetail(taskId);
+    const executionId = Number(task.execution) || 0;
+    let html = '';
+    if (executionId) html = await this.#page(`/task-assignTo-${executionId}-${Number(taskId)}.html?onlybody=yes`).catch(() => '');
+    if (!html) html = await this.#page(`/task-assignTo-${Number(taskId)}.html`).catch(() => '');
+    const users = selectOptions(html, 'assignedTo')
+      .map((option) => ({
+        value: option.value,
+        label: String(option.label || option.value).replace(/^[A-Za-z]{1,3}:/, '').trim(),
+      }))
+      .filter((option) => option.value);
+    return { users, current: task.assignedTo?.account || '' };
+  }
+
+  /** Change a task status through the matching ZenTao action page. */
+  async changeTaskStatus(taskId, statusKey) {
+    const id = Number(taskId);
+    const task = await this.taskDetail(id);
+    const actions = await this.taskActions(id).catch(() => []);
+    const has = (action) => actions.includes(action);
+    const candidates =
+      statusKey === 'doing'
+        ? ['start', 'restart', 'activate']
+        : statusKey === 'done'
+          ? ['finish']
+          : statusKey === 'pause'
+            ? ['pause']
+            : statusKey === 'cancel'
+              ? ['cancel']
+              : statusKey === 'closed'
+                ? ['close']
+                : [];
+    const action = candidates.find((name) => has(name));
+    if (!action) {
+      throw new ZenTaoError(
+        `任务当前不允许改为「${TASK_STATUS_TEXT[statusKey] || statusKey}」，可用动作：${actions.join('、') || '无'}`,
+        'ZT_ACTION',
+      );
+    }
+    const pagePath = `/task-${action}-${id}.html`;
+    const html = await this.#page(pagePath);
+    const form = parseFormFields(html);
+    const today = new Date().toISOString().slice(0, 10);
+    if (action === 'start' || action === 'restart' || action === 'activate') {
+      form.realStarted = form.realStarted && form.realStarted !== '0000-00-00' ? form.realStarted : today;
+      // 禅道 start 表单校验「总计消耗」不能为空/0
+      form.consumed = String(Math.max(1, Number(task.consumed) || 0));
+      // 预计剩余必须 > 0，否则禅道会认为任务已做完直接完成
+      form.left = String(Math.max(1, Number(task.left) || Number(task.estimate) || 0));
+      if ('currentConsumed' in form) form.currentConsumed = form.consumed;
+    }
+    if (action === 'finish') {
+      // 禅道 finish 表单校验「本次消耗」不能为 0，至少要填 1 小时
+      const spent = Math.max(1, (Number(task.consumed) || 0) + (Number(task.left) || 0));
+      form.consumed = String(spent);
+      if ('currentConsumed' in form) form.currentConsumed = String(spent);
+      form.left = '0';
+      // 未开始的任务直接完成时，禅道要求填写实际开始日期
+      if ('realStarted' in form && (!form.realStarted || form.realStarted.startsWith('0000'))) {
+        form.realStarted = today;
+      }
+      // 完成日期：禅道 finish 表单要求 finishedDate（YYYY-MM-DD HH:mm:ss）
+      const finishedAt = new Date();
+      const finishedDate =
+        finishedAt.getFullYear() +
+        '-' +
+        String(finishedAt.getMonth() + 1).padStart(2, '0') +
+        '-' +
+        String(finishedAt.getDate()).padStart(2, '0') +
+        ' ' +
+        String(finishedAt.getHours()).padStart(2, '0') +
+        ':' +
+        String(finishedAt.getMinutes()).padStart(2, '0') +
+        ':' +
+        String(finishedAt.getSeconds()).padStart(2, '0');
+      if ('finishedDate' in form) form.finishedDate = finishedDate;
+    }
+    form.comment = '';
+    const res = await this.post(pagePath, form);
+    const parsed = parseFormResponse(res, '修改任务状态');
+    return Object.assign({ status: statusKey, action }, parsed);
+  }
+
+  /** Re-assign a task. */
+  async assignTask(taskId, account) {
+    const id = Number(taskId);
+    const value = String(account || '').trim();
+    if (!value) throw new ZenTaoError('指派账号不能为空', 'ZT_INPUT');
+    await this.#apiRequest('PUT', `tasks/${id}`, { assignedTo: value });
+    return { ok: true, assignedTo: value };
+  }
+
+  /** Update a task deadline (YYYY-MM-DD). */
+  async setTaskDeadline(taskId, deadline) {
+    const id = Number(taskId);
+    const value = String(deadline || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new ZenTaoError('截止日期格式应为 YYYY-MM-DD', 'ZT_INPUT');
+    await this.#apiRequest('PUT', `tasks/${id}`, { deadline: value });
+    return { ok: true, deadline: value };
+  }
+
+  /** Current week's pending work for the signed-in account (dashboard). */
+  async dashboard() {
+    const me = String(this.account || '').toLowerCase();
+    const now = new Date();
+    const monday = new Date(now);
+    const day = (now.getDay() + 6) % 7;
+    monday.setDate(now.getDate() - day);
+    const weekStart = [monday.getFullYear(), String(monday.getMonth() + 1).padStart(2, '0'), String(monday.getDate()).padStart(2, '0')].join('-');
+    const weekEndDate = new Date(monday);
+    weekEndDate.setDate(monday.getDate() + 6);
+    const weekEnd = [weekEndDate.getFullYear(), String(weekEndDate.getMonth() + 1).padStart(2, '0'), String(weekEndDate.getDate()).padStart(2, '0')].join('-');
+    // assignedTo is an object on bugs/tasks and a plain account string on
+    // execution stories.
+    const assigneeOf = (item) =>
+      typeof item?.assignedTo === 'string' ? item.assignedTo : item?.assignedTo?.account;
+    const isMine = (item) => String(assigneeOf(item) || '').toLowerCase() === me;
+    const inWeek = (deadline) => Boolean(deadline) && deadline <= weekEnd;
+    const strip = (text) => decodeEntities(stripHtml(String(text || ''))).replace(/<[^>]+>/g, '').trim();
+    const projects = await this.#apiRequest('GET', 'projects');
+    const projectList = Array.isArray(projects.projects) ? projects.projects : [];
+    // 需求按迭代日期筛选：先找与本周有交集的迭代，再取这些迭代里的未关闭需求
+    const [taskData, executionsData, ...bugResults] = await Promise.all([
+      this.#apiRequest('GET', 'tasks').catch(() => ({ tasks: [] })),
+      this.#apiRequest('GET', 'executions').catch(() => ({ executions: [] })),
+      ...projectList.map((project) =>
+        this.#apiRequest('GET', `projects/${project.id}/bugs`).catch(() => ({ bugs: [] })),
+      ),
+    ]);
+    const executions = Array.isArray(executionsData.executions) ? executionsData.executions : [];
+    const weekExecutions = executions.filter(
+      (item) => item.begin && item.end && item.begin <= weekEnd && item.end >= weekStart,
+    );
+    const executionStoryResults = await Promise.all(
+      weekExecutions.map((execution) =>
+        this.#apiRequest('GET', `executions/${execution.id}/stories`).catch(() => ({ stories: [] })),
+      ),
+    );
+    const stories = new Map();
+    for (const data of executionStoryResults) {
+      for (const item of data.stories || []) stories.set(item.id, item);
+    }
+    const bugs = new Map();
+    for (const data of bugResults) {
+      for (const item of data.bugs || []) bugs.set(item.id, item);
+    }
+    // 需求：本周有交集的迭代内、指派给我的未关闭需求
+    const storyList = [...stories.values()]
+      .filter((item) => isMine(item) && item.status !== 'closed')
+      .map((item) => ({
+        id: item.id,
+        type: 'story',
+        title: strip(item.title),
+        deadline: item.deadline || '',
+        status: item.status,
+        statusText: item.statusText || '',
+        url: `/story-view-${item.id}.html`,
+      }))
+      .sort((a, b) => (a.deadline || '9999-99-99').localeCompare(b.deadline || '9999-99-99'));
+    const bugList = [...bugs.values()]
+      .filter((item) => isMine(item) && item.status !== 'closed' && inWeek(item.deadline || ''))
+      .map((item) => ({
+        id: item.id,
+        type: 'bug',
+        title: strip(item.title),
+        deadline: item.deadline || '',
+        status: item.status,
+        statusText: item.statusText || '',
+        url: `/bug-view-${item.id}.html`,
+      }))
+      .sort((a, b) => (a.deadline || '9999-99-99').localeCompare(b.deadline || '9999-99-99'));
+    const taskList = (Array.isArray(taskData.tasks) ? taskData.tasks : [])
+      .filter(
+        (item) =>
+          String(item?.assignedTo?.account || '').toLowerCase() === me &&
+          !['done', 'closed', 'cancel'].includes(item.status) &&
+          inWeek(item.deadline || ''),
+      )
+      .map((item) => ({
+        id: item.id,
+        type: 'task',
+        title: strip(item.name),
+        deadline: item.deadline || '',
+        status: item.status,
+        statusText: TASK_STATUS_TEXT[item.status] || item.status || '',
+        url: `/task-view-${item.id}.html`,
+      }))
+      .sort((a, b) => (a.deadline || '9999-99-99').localeCompare(b.deadline || '9999-99-99'));
+    return {
+      weekStart,
+      weekEnd,
+      account: this.account,
+      totals: { story: storyList.length, bug: bugList.length, task: taskList.length },
+      lists: { story: storyList, bug: bugList, task: taskList },
+    };
+  }
+
+  /** All unfinished tasks assigned to me (calendar source). */
+  async myTasks() {
+    const me = String(this.account || '').toLowerCase();
+    const data = await this.#apiRequest('GET', 'tasks');
+    const list = Array.isArray(data.tasks) ? data.tasks : [];
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 90);
+    const cutoff = cutoffDate.toISOString().slice(0, 10);
+    return list
+      .filter((item) => {
+        const account = String(item?.assignedTo?.account || '').toLowerCase();
+        if (account !== me || item.status === 'cancel') return false;
+        // Keep recently completed tasks so the calendar can show them grayed out.
+        if (['done', 'closed'].includes(item.status)) return Boolean(item.deadline) && item.deadline >= cutoff;
+        return true;
+      })
+      .map((item) => ({
+        id: item.id,
+        type: 'task',
+        title: item.name || '',
+        deadline: item.deadline || '',
+        assignedDate: item.assignedDate || '',
+        status: item.status || '',
+        statusText: TASK_STATUS_TEXT[item.status] || item.status || '',
+        done: item.status === 'done' || item.status === 'closed',
+        execution: item.execution || 0,
+        project: item.project || 0,
+        url: `/task-view-${item.id}.html`,
+      }))
+      .sort((a, b) => (a.deadline || '9999-99-99').localeCompare(b.deadline || '9999-99-99'));
+  }
+
+  /** Iterations visible to the signed-in account (calendar task creation). */
+  async iterationsForUser() {
+    const [projectsData, executionsData] = await Promise.all([
+      this.#apiRequest('GET', 'projects').catch(() => ({ projects: [] })),
+      this.#apiRequest('GET', 'executions').catch(() => ({ executions: [] })),
+    ]);
+    const names = new Map();
+    for (const project of Array.isArray(projectsData.projects) ? projectsData.projects : []) names.set(project.id, project.name);
+    const list = Array.isArray(executionsData.executions) ? executionsData.executions : [];
+    return list
+      .filter((item) => ['wait', 'doing'].includes(item.status))
+      .map((item) => ({
+        id: item.id,
+        name: item.name || '',
+        projectId: item.project || 0,
+        projectName: names.get(item.project) || '',
+        status: item.status || '',
+        statusText: item.status === 'doing' ? '进行中' : item.status === 'suspended' ? '已挂起' : item.status === 'wait' ? '未开始' : item.status || '',
+        begin: item.begin || '',
+        end: item.end || '',
+      }))
+      .sort((a, b) => {
+        // 进行中 first, then 未开始; stable by project/name inside a group.
+        if (a.status !== b.status) return a.status === 'doing' ? -1 : 1;
+        return a.projectName.localeCompare(b.projectName, 'zh-Hans-CN') || a.id - b.id;
+      });
+  }
+
+  /** Members of an iteration's team (assignee options). */
+  async taskTeam(executionId) {
+    return await this.executionMembers(Number(executionId));
+  }
+
+  /** Create a task inside an iteration (REST v1). */
+  async createTask(input) {
+    const executionId = Number(input.executionId) || 0;
+    const projectId = Number(input.projectId) || 0;
+    const name = String(input.title || '').trim();
+    if (!name) throw new ZenTaoError('任务标题不能为空', 'ZT_INPUT');
+    if (!executionId) throw new ZenTaoError('请选择迭代', 'ZT_INPUT');
+    const today = new Date().toISOString().slice(0, 10);
+    const body = {
+      project: projectId,
+      name,
+      type: 'devel',
+      pri: Math.min(3, Math.max(1, Number(input.priority) || 3)),
+      assignedTo: String(input.assignedTo || ''),
+      deadline: String(input.deadline || today),
+      estStarted: today,
+      estimate: 0,
+      left: 0,
+      desc: String(input.description || ''),
+      module: 0,
+      story: Number(input.storyId) || 0,
+    };
+    // ZenTao v1 creates tasks under an execution: POST /executions/{id}/tasks
+    const res = await this.#apiRequest('POST', `executions/${executionId}/tasks`, body);
+    const id = Number(res && res.id) || 0;
+    if (!id) throw new ZenTaoError('禅道没有返回新任务 ID', 'ZT_API');
+    return { ok: true, id, name: (res && res.name) || name, url: `/task-view-${id}.html` };
   }
 
   /** Detail text blocks of a story: description, acceptance criteria. */

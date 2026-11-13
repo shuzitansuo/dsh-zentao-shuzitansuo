@@ -6,9 +6,10 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react');
     const h = React.createElement;
+
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.0.1';
+    const PLUGIN_VERSION = 'v0.0.2';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
@@ -129,8 +130,9 @@ window.__ModuleLoader__.load({
     function loadLayout() {
       const fallback = { leftOpen: true, rightOpen: true, leftW: 300, rightW: 420 };
       const viewport = typeof window !== 'undefined' ? window.innerWidth || 1280 : 1280;
-      // Leave at least a usable middle column in the current viewport.
-      const budget = Math.max(560, viewport - 360);
+      // Leave at least a usable dashboard/calendar column in the current viewport.
+      const MIN_MIDDLE = 680;
+      const budget = Math.max(560, viewport - MIN_MIDDLE);
       try {
         const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null');
         if (!saved) {
@@ -160,10 +162,224 @@ window.__ModuleLoader__.load({
     }
 
     const CHAT_KEY = 'dsh-zentao-chat-v1';
-    const SHOW_CLOSED_KEY = 'dsh-zentao-show-closed-v1';
+    const SHOW_ACTIVE_KEY = 'dsh-zentao-show-active-v1';
     const COL_WIDTHS_KEY = 'dsh-zentao-col-widths-v1';
     const COL_ORDER_KEY = 'dsh-zentao-col-order-v1';
     const COLUMN_KEYS = ['id', 'title', 'module', 'priority', 'assignee', 'status'];
+    const PINNED_KEY = 'dsh-zentao-pinned-v1';
+
+    function loadPinned() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(PINNED_KEY) || '[]');
+        if (!Array.isArray(raw)) return [];
+        return raw.filter((item) => item && item.executionId && item.executionName);
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function savePinned(items) {
+      try {
+        localStorage.setItem(PINNED_KEY, JSON.stringify(items));
+      } catch (error) {
+        /* storage unavailable */
+      }
+    }
+
+
+    // 农历 / 二十四节气（1900–2100 通用农历数据表 + 标准节气算法）
+    const LUNAR_INFO = [
+      0x04bd8, 0x04ae0, 0x0a570, 0x054d5, 0x0d260, 0x0d950, 0x16554, 0x056a0, 0x09ad0, 0x055d2,
+      0x04ae0, 0x0a5b6, 0x0a4d0, 0x0d250, 0x1d255, 0x0b540, 0x0d6a0, 0x0ada2, 0x095b0, 0x14977,
+      0x04970, 0x0a4b0, 0x0b4b5, 0x06a50, 0x06d40, 0x1ab54, 0x02b60, 0x09570, 0x052f2, 0x04970,
+      0x06566, 0x0d4a0, 0x0ea50, 0x06e95, 0x05ad0, 0x02b60, 0x186e3, 0x092e0, 0x1c8d7, 0x0c950,
+      0x0d4a0, 0x1d8a6, 0x0b550, 0x056a0, 0x1a5b4, 0x025d0, 0x092d0, 0x0d2b2, 0x0a950, 0x0b557,
+      0x06ca0, 0x0b550, 0x15355, 0x04da0, 0x0a5d0, 0x14573, 0x052d0, 0x0a9a8, 0x0e950, 0x06aa0,
+      0x0aea6, 0x0ab50, 0x04b60, 0x0aae4, 0x0a570, 0x05260, 0x0f263, 0x0d950, 0x05b57, 0x056a0,
+      0x096d0, 0x04dd5, 0x04ad0, 0x0a4d0, 0x0d4d4, 0x0d250, 0x0d558, 0x0b540, 0x0b5a0, 0x195a6,
+      0x095b0, 0x049b0, 0x0a974, 0x0a4b0, 0x0b27a, 0x06a50, 0x06d40, 0x0af46, 0x0ab60, 0x09570,
+      0x04af5, 0x04970, 0x064b0, 0x074a3, 0x0ea50, 0x06b58, 0x055c0, 0x0ab60, 0x096d5, 0x092e0,
+      0x0c960, 0x0d954, 0x0d4a0, 0x0da50, 0x07552, 0x056a0, 0x0abb7, 0x025d0, 0x092d0, 0x0cab5,
+      0x0a950, 0x0b4a0, 0x0baa4, 0x0ad50, 0x055d9, 0x04ba0, 0x0a5b0, 0x15176, 0x052b0, 0x0a930,
+      0x07954, 0x06aa0, 0x0ad50, 0x05b52, 0x04b60, 0x0a6e6, 0x0a4e0, 0x0d260, 0x0ea65, 0x0d530,
+      0x05aa0, 0x076a3, 0x096d0, 0x04afb, 0x04ad0, 0x0a4d0, 0x1d0b6, 0x0d250, 0x0d520, 0x0dd45,
+      0x0b5a0, 0x056d0, 0x055b2, 0x049b0, 0x0a577, 0x0a4b0, 0x0aa50, 0x1b255, 0x06d20, 0x0ada0,
+      0x14b63, 0x09370, 0x049f8, 0x04970, 0x064b0, 0x168a6, 0x0ea50, 0x06b20, 0x1a6c4, 0x0aae0,
+      0x0a2e0, 0x0d2e3, 0x0c960, 0x0d557, 0x0d4a0, 0x0da50, 0x05d55, 0x056a0, 0x0a6d0, 0x055d4,
+      0x052d0, 0x0a9b8, 0x0a950, 0x0b4a0, 0x0b6a6, 0x0ad50, 0x055a0, 0x0aba4, 0x0a5b0, 0x052b0,
+      0x0b273, 0x06930, 0x07337, 0x06aa0, 0x0ad50, 0x14b55, 0x04b60, 0x0a570, 0x054e4, 0x0d160,
+      0x0e968, 0x0d520, 0x0daa0, 0x16aa6, 0x056d0, 0x04ae0, 0x0a9d4, 0x0a2d0, 0x0d150, 0x0f252,
+      0x0d520,
+    ];
+    const lunarLeapMonth = (year) => LUNAR_INFO[year - 1900] & 0xf;
+    const lunarLeapDays = (year) => (lunarLeapMonth(year) ? ((LUNAR_INFO[year - 1900] & 0x10000) ? 30 : 29) : 0);
+    const lunarMonthDays = (year, month) => ((LUNAR_INFO[year - 1900] & (0x10000 >> month)) ? 30 : 29);
+    const lunarYearDays = (year) => {
+      let sum = 348;
+      for (let bit = 0x8000; bit > 0x8; bit >>= 1) sum += LUNAR_INFO[year - 1900] & bit ? 1 : 0;
+      return sum + lunarLeapDays(year);
+    };
+    const solarToLunar = (date) => {
+      let offset = Math.floor((Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) - Date.UTC(1900, 0, 31)) / 86400000);
+      let year = 1900;
+      let temp = 0;
+      for (; year < 2101 && offset > 0; year += 1) {
+        temp = lunarYearDays(year);
+        offset -= temp;
+      }
+      if (offset < 0) {
+        offset += temp;
+        year -= 1;
+      }
+      const leap = lunarLeapMonth(year);
+      let isLeap = false;
+      let month = 1;
+      for (; month < 13 && offset > 0; month += 1) {
+        if (leap > 0 && month === leap + 1 && !isLeap) {
+          month -= 1;
+          isLeap = true;
+          temp = lunarLeapDays(year);
+        } else {
+          temp = lunarMonthDays(year, month);
+        }
+        if (isLeap && month === leap + 1) isLeap = false;
+        offset -= temp;
+      }
+      if (offset === 0 && leap > 0 && month === leap + 1) {
+        if (isLeap) {
+          isLeap = false;
+        } else {
+          isLeap = true;
+          month -= 1;
+        }
+      }
+      if (offset < 0) {
+        offset += temp;
+        month -= 1;
+      }
+      return { year, month, day: offset + 1, isLeap };
+    };
+    const SOLAR_TERMS = [
+      '小寒', '大寒', '立春', '雨水', '惊蛰', '春分', '清明', '谷雨', '立夏', '小满', '芒种', '夏至',
+      '小暑', '大暑', '立秋', '处暑', '白露', '秋分', '寒露', '霜降', '立冬', '小雪', '大雪', '冬至',
+    ];
+    const SOLAR_TERM_INFO = [
+      0, 21208, 42467, 63836, 85337, 107014, 128867, 150921, 173149, 195551, 218072, 240693,
+      263343, 285989, 308563, 331033, 353350, 375494, 397447, 419210, 440795, 462224, 483532, 504758,
+    ];
+    const solarTermOf = (date) => {
+      const month = date.getMonth();
+      for (const index of [month * 2, month * 2 + 1]) {
+        const ms =
+          31556925974.7 * (date.getFullYear() - 1900) +
+          SOLAR_TERM_INFO[index] * 60000 +
+          Date.UTC(1900, 0, 6, 2, 5);
+        if (new Date(ms).getUTCDate() === date.getDate()) return SOLAR_TERMS[index];
+      }
+      return '';
+    };
+    const LUNAR_MONTH_NAMES = ['正', '二', '三', '四', '五', '六', '七', '八', '九', '十', '冬', '腊'];
+    const LUNAR_DAY_NAMES = (() => {
+      const digits = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+      const names = [];
+      for (let day = 1; day <= 30; day += 1) {
+        if (day === 10) names.push('初十');
+        else if (day === 20) names.push('二十');
+        else if (day === 30) names.push('三十');
+        else if (day < 10) names.push('初' + digits[day - 1]);
+        else if (day < 20) names.push('十' + digits[day - 11]);
+        else names.push('廿' + digits[day - 21]);
+      }
+      return names;
+    })();
+    const LUNAR_FESTIVALS = {
+      '1-1': '春节',
+      '1-15': '元宵节',
+      '2-2': '龙抬头',
+      '5-5': '端午节',
+      '7-7': '七夕',
+      '7-15': '中元节',
+      '8-15': '中秋节',
+      '9-9': '重阳节',
+      '12-8': '腊八节',
+      '12-23': '小年',
+    };
+    const lunarLabelOf = (date) => {
+      const lunar = solarToLunar(date);
+      if (!lunar.isLeap) {
+        const festival = LUNAR_FESTIVALS[lunar.month + '-' + lunar.day];
+        if (festival) return { text: festival, type: 'festival' };
+      }
+      // 除夕：农历腊月最后一天（次日为正月初一）
+      const next = new Date(date);
+      next.setDate(date.getDate() + 1);
+      const nextLunar = solarToLunar(next);
+      if (nextLunar.month === 1 && nextLunar.day === 1) return { text: '除夕', type: 'festival' };
+      const term = solarTermOf(date);
+      if (term) return { text: term, type: 'term' };
+      if (lunar.day === 1) {
+        return { text: (lunar.isLeap ? '闰' : '') + LUNAR_MONTH_NAMES[lunar.month - 1] + '月', type: 'lunar' };
+      }
+      return { text: LUNAR_DAY_NAMES[lunar.day - 1], type: 'lunar' };
+    };
+
+    // 中国法定节假日调休标记：休 = 放假，班 = 补班（2025-2026 国务院办公厅安排）
+    const CN_DAY_TAGS = (() => {
+      const tags = {};
+      const keyOf = (date) =>
+        `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      const range = (start, end, tag) => {
+        const cursor = new Date(start + 'T00:00:00');
+        const stop = new Date(end + 'T00:00:00');
+        while (cursor <= stop) {
+          tags[keyOf(cursor)] = tag;
+          cursor.setDate(cursor.getDate() + 1);
+        }
+      };
+      const day = (date, tag) => {
+        tags[date] = tag;
+      };
+      // 2025
+      day('2025-01-01', '休');
+      range('2025-01-28', '2025-02-04', '休');
+      day('2025-01-26', '班');
+      day('2025-02-08', '班');
+      range('2025-04-04', '2025-04-06', '休');
+      range('2025-05-01', '2025-05-05', '休');
+      day('2025-04-27', '班');
+      range('2025-05-31', '2025-06-02', '休');
+      range('2025-10-01', '2025-10-08', '休');
+      day('2025-09-28', '班');
+      day('2025-10-11', '班');
+      // 2026
+      range('2026-01-01', '2026-01-03', '休');
+      day('2026-01-04', '班');
+      range('2026-02-15', '2026-02-23', '休');
+      day('2026-02-14', '班');
+      day('2026-02-28', '班');
+      range('2026-04-04', '2026-04-06', '休');
+      range('2026-05-01', '2026-05-05', '休');
+      day('2026-05-09', '班');
+      range('2026-06-19', '2026-06-21', '休');
+      range('2026-09-25', '2026-09-27', '休');
+      range('2026-10-01', '2026-10-07', '休');
+      day('2026-09-20', '班');
+      day('2026-10-10', '班');
+      // 2027（国办发明电〔2026〕10号）
+      range('2027-01-01', '2027-01-03', '休');
+      range('2027-02-05', '2027-02-13', '休');
+      day('2027-01-31', '班');
+      day('2027-02-14', '班');
+      range('2027-04-03', '2027-04-05', '休');
+      range('2027-05-01', '2027-05-05', '休');
+      day('2027-05-08', '班');
+      day('2027-06-09', '休');
+      day('2027-09-15', '休');
+      range('2027-10-01', '2027-10-07', '休');
+      day('2027-09-26', '班');
+      day('2027-10-09', '班');
+      return tags;
+    })();
 
     function loadColOrder() {
       try {
@@ -193,7 +409,7 @@ window.__ModuleLoader__.load({
         const raw = JSON.parse(localStorage.getItem(COL_WIDTHS_KEY) || 'null');
         if (!raw || typeof raw !== 'object') return null;
         const base = ['id', 'title', 'module', 'priority', 'assignee', 'status'];
-        const extra = ['storyState'];
+        const extra = ['storyState', 'deadline', 'owner', 'begin', 'end', 'testtaskName', 'date'];
         const out = {};
         for (const key of base.concat(extra)) {
           const value = Number(raw[key]);
@@ -217,10 +433,10 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** null = the user never chose; the host config default applies. */
-    function readShowClosed() {
+    /** null = the user never chose; the default (only active) applies. */
+    function readShowActiveOnly() {
       try {
-        const raw = localStorage.getItem(SHOW_CLOSED_KEY);
+        const raw = localStorage.getItem(SHOW_ACTIVE_KEY);
         if (raw === '0') return false;
         if (raw === '1') return true;
       } catch (error) {
@@ -350,6 +566,9 @@ window.__ModuleLoader__.load({
         copy: ['M5 8.5H14.5C15.3 8.5 16 9.2 16 10V19C16 19.8 15.3 20.5 14.5 20.5H5C4.2 20.5 3.5 19.8 3.5 19V10C3.5 9.2 4.2 8.5 5 8.5Z', 'M9.5 4.5H18.5C19.3 4.5 20 5.2 20 6V15.5'],
         attach: ['M20.5062 12.3131L12.728 20.0913C10.3848 22.4344 6.58586 22.4344 4.24271 20.0913C1.89957 17.7481 1.89956 13.9491 4.24271 11.606L12.0209 3.82782C13.583 2.26573 16.1156 2.26573 17.6777 3.82782C19.2398 5.38992 19.2398 7.92258 17.6777 9.48468L9.89957 17.2628C9.11852 18.0439 7.85219 18.0439 7.07114 17.2628C6.29009 16.4818 6.29009 15.2155 7.07114 14.4344L14.1422 7.36336'],
         edit: ['M14.1048 6.00427L4.78744 15.3216L3.99805 20.0001L8.67652 19.2107L17.9939 9.89336L14.1048 6.00427ZM14.1048 6.00427L17.1615 2.94727L21.0506 6.83635L17.9939 9.89336'],
+        bookmark: ['M6.5 3H17.5V21L12 16.5L6.5 21V3Z'],
+        'fold-vertical': ['M7 3L12 8L17 3', 'M7 21L12 16L17 21'],
+        'unfold-vertical': ['M7 9L12 4L17 9', 'M7 15L12 20L17 15'],
         folder: ['M2 3.5H9L11 6H22V20H2V3.5Z'],
         'folder-open': ['M2 20V3.5H8.5L10.5 6H22V9', 'M2 20L5 9H22L18.5 20H2Z'],
         mic: ['M12 18V21M7 21H17M6.5 14H9M6.5 7H9M6.5 10.5H9M15 14H17.5M15 7H17.5M15 10.5H17.5M6 7V13C6 13.3425 6.03443 13.6769 6.10002 14C6.56329 16.2822 8.58104 18 11 18C11.781 18 12.219 18 13 18C15.419 18 17.4367 16.2822 17.9 14C17.9656 13.6769 18 13.3425 18 13V7C18 4.23858 15.7614 2 13 2H11C8.23858 2 6 4.23858 6 7Z'],
@@ -685,10 +904,32 @@ window.__ModuleLoader__.load({
           return false;
         }
       });
-      const [items, setItems] = useState({ story: [], bug: [] });
+      const [items, setItems] = useState({ story: [], bug: [], task: [], testtask: [], report: [] });
+      // 每次打开软件默认进入仪表盘；会话内可切到列表。
+      const [view, setView] = useState('dashboard');
+      const [pinned, setPinned] = useState(loadPinned);
+      const [dashboard, setDashboard] = useState({ loading: false, error: '', data: null });
+      const [calendarMonth, setCalendarMonth] = useState(() => {
+        const now = new Date();
+        return { year: now.getFullYear(), month: now.getMonth() + 1 };
+      });
+      const [calendarMode, setCalendarMode] = useState('week');
+      const [selectedDate, setSelectedDate] = useState(() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      });
+      const [weekAnchor, setWeekAnchor] = useState(() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      });
+      const [myTasks, setMyTasks] = useState({ loading: false, error: '', tasks: [] });
+      const [taskModal, setTaskModal] = useState(null);
+      const [completingTasks, setCompletingTasks] = useState([]);
+      const dragTaskRef = useRef(null);
+      const modalDialogRef = useRef(null);
       const [sort, setSort] = useState({ key: '', dir: 'asc' });
-      const [showClosed, setShowClosed] = useState(() => {
-        const stored = readShowClosed();
+      const [showActiveOnly, setShowActiveOnly] = useState(() => {
+        const stored = readShowActiveOnly();
         return stored === null ? true : stored;
       });
       const [colWidths, setColWidths] = useState(loadColWidths);
@@ -709,7 +950,10 @@ window.__ModuleLoader__.load({
       const [assignToast, setAssignToast] = useState(null);
       const [copiedMsgId, setCopiedMsgId] = useState('');
       const [docBusy, setDocBusy] = useState(false);
+      const [pendingImages, setPendingImages] = useState([]);
+      const [updateState, setUpdateState] = useState({ checking: false, text: '', tone: '', available: '' });
       const docInputRef = useRef(null);
+      const importUpdateInputRef = useRef(null);
       const [editingConvId, setEditingConvId] = useState('');
       const [editingTitle, setEditingTitle] = useState('');
       const copiedTimerRef = useRef(null);
@@ -797,7 +1041,7 @@ window.__ModuleLoader__.load({
             const avail = Math.max(480, width - 24);
             const railLeft = prev.leftOpen ? 0 : 40;
             const railRight = prev.rightOpen ? 0 : 40;
-            const middleMin = 300;
+            const middleMin = 560;
             let leftW = prev.leftOpen ? clamp(prev.leftW, 200, 560) : prev.leftW;
             let rightW = prev.rightOpen ? clamp(prev.rightW, 260, 640) : prev.rightW;
             const budget = avail - railLeft - railRight - middleMin;
@@ -817,9 +1061,13 @@ window.__ModuleLoader__.load({
           });
         };
         fit();
+        const raf = requestAnimationFrame(fit);
         window.addEventListener('resize', fit);
-        return () => window.removeEventListener('resize', fit);
-      }, []);
+        return () => {
+          cancelAnimationFrame(raf);
+          window.removeEventListener('resize', fit);
+        };
+      }, [chatMode]);
 
       useEffect(() => {
         busyRef.current = busy;
@@ -854,6 +1102,56 @@ window.__ModuleLoader__.load({
           assignNotifiedRef.current = next.unread;
         });
       }, []);
+
+      const readImageFile = (file) =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = String(reader.result || '');
+            const comma = result.indexOf(',');
+            resolve({
+              name: file.name || '粘贴的图片',
+              mimeType: file.type || 'image/png',
+              data: comma >= 0 ? result.slice(comma + 1) : result,
+              preview: result,
+            });
+          };
+          reader.onerror = () => reject(new Error('读取图片失败'));
+          reader.readAsDataURL(file);
+        });
+
+      const handleImagePaste = async (event) => {
+        const items = event.clipboardData && event.clipboardData.items ? Array.from(event.clipboardData.items) : [];
+        const files = items
+          .filter((item) => item.kind === 'file' && item.type && item.type.indexOf('image/') === 0)
+          .map((item) => item.getAsFile())
+          .filter(Boolean)
+          .slice(0, 4);
+        if (!files.length) return;
+        event.preventDefault();
+        const limit = 4 - pendingImages.length;
+        if (limit <= 0) {
+          setActionError('最多一次粘贴 4 张图片');
+          return;
+        }
+        const accepted = [];
+        for (const file of files.slice(0, limit)) {
+          if (file.size > 3 * 1024 * 1024) {
+            setActionError('单张图片不能超过 3MB');
+            continue;
+          }
+          try {
+            accepted.push(await readImageFile(file));
+          } catch (error) {
+            setActionError(error.message);
+          }
+        }
+        if (accepted.length) setPendingImages((prev) => prev.concat(accepted).slice(0, 4));
+      };
+
+      const removePendingImage = (index) => {
+        setPendingImages((prev) => prev.filter((_, i) => i !== index));
+      };
 
       const onDocumentSelected = async (event) => {
         const file = event.target.files && event.target.files[0];
@@ -1071,9 +1369,6 @@ window.__ModuleLoader__.load({
           setProjects(list);
           if (data.baseUrl) setBaseUrl(data.baseUrl);
           setTreeError('');
-          if (readShowClosed() === null && data.config && typeof data.config.showClosed === 'boolean') {
-            setShowClosed(data.config.showClosed);
-          }
           const preferred = list.find((p) => p.name && p.name.indexOf('DSH') >= 0) || list[0];
           if (preferred) {
             setOpenProjects((prev) => (Object.keys(prev).length ? prev : { [preferred.id]: true }));
@@ -1128,24 +1423,327 @@ window.__ModuleLoader__.load({
 
       const loadItems = useCallback(async (executionId, fresh = false) => {
         if (!executionId) {
-          setItems({ story: [], bug: [] });
+          setItems({ story: [], bug: [], task: [], testtask: [], report: [] });
           return;
         }
         setLoading(true);
         setListError('');
         const suffix = '&executionId=' + executionId + (fresh ? '&fresh=1' : '');
         try {
-          const [stories, bugs] = await Promise.all([
-            api('/zentao/api/items?type=story' + suffix),
-            api('/zentao/api/items?type=bug' + suffix),
-          ]);
-          setItems({ story: stories.items || [], bug: bugs.items || [] });
+          const types = ['story', 'bug', 'task', 'testtask', 'report'];
+          const res = await Promise.all(types.map((type) => api('/zentao/api/items?type=' + type + suffix)));
+          const next = { story: [], bug: [], task: [], testtask: [], report: [] };
+          types.forEach((type, index) => {
+            next[type] = (res[index] && res[index].items) || [];
+          });
+          setItems(next);
         } catch (error) {
           setListError(error.message);
         } finally {
           setLoading(false);
         }
       }, []);
+
+      const loadDashboard = useCallback(async (fresh = false) => {
+        setDashboard((prev) => Object.assign({}, prev, { loading: true, error: '' }));
+        try {
+          const res = await api('/zentao/api/dashboard' + (fresh ? '?fresh=1' : ''));
+          if (!res || !res.ok) throw new Error((res && res.error) || '读取仪表盘失败');
+          setDashboard({ loading: false, error: '', data: res.dashboard });
+        } catch (error) {
+          setDashboard((prev) => Object.assign({}, prev, { loading: false, error: error.message }));
+        }
+      }, []);
+
+      const loadMyTasks = useCallback(async (fresh = false) => {
+        setMyTasks((prev) => Object.assign({}, prev, { loading: true, error: '' }));
+        try {
+          // 时间戳同时绕过浏览器 HTTP 缓存；fresh=1 让宿主跳过 60 秒缓存
+          const res = await api('/zentao/api/my-tasks?fresh=' + (fresh ? '1' : '0') + '&t=' + Date.now());
+          if (!res || !res.ok) throw new Error((res && res.error) || '读取我的任务失败');
+          setMyTasks({ loading: false, error: '', tasks: res.tasks || [] });
+        } catch (error) {
+          setMyTasks((prev) => Object.assign({}, prev, { loading: false, error: error.message }));
+        }
+      }, []);
+
+      useEffect(() => {
+        if (view === 'dashboard') {
+          loadDashboard(false);
+          loadMyTasks(false);
+        }
+      }, [view, loadDashboard, loadMyTasks]);
+
+      useEffect(() => {
+        if (chatMode !== 'custom') return undefined;
+        let alive = true;
+        api('/zentao/api/update/check')
+          .then((res) => {
+            if (!alive || !res || !res.ok || !res.update) return;
+            if (res.update.hasUpdate) {
+              setUpdateState({
+                checking: false,
+                text: '发现新版本 v' + res.update.latest + '，可点击「检查更新」升级',
+                tone: 'info',
+                available: res.update.latest,
+              });
+            }
+          })
+          .catch(() => {});
+        return () => {
+          alive = false;
+        };
+      }, [chatMode]);
+
+      const onImportUpdateSelected = (event) => {
+        const file = event.target.files && event.target.files[0];
+        event.target.value = '';
+        if (!file) return;
+        if (!/\.zip$/i.test(file.name || '')) {
+          setUpdateState({ checking: false, text: '请选择 .zip 格式的更新包', tone: 'error', available: '' });
+          return;
+        }
+        if (file.size > 30 * 1024 * 1024) {
+          setUpdateState({ checking: false, text: '更新包不能超过 30MB', tone: 'error', available: '' });
+          return;
+        }
+        setUpdateState({ checking: true, text: '正在导入 ' + file.name + '…', tone: '', available: '' });
+        const reader = new FileReader();
+        reader.onload = async () => {
+          try {
+            const result = String(reader.result || '');
+            const comma = result.indexOf(',');
+            const data = comma >= 0 ? result.slice(comma + 1) : result;
+            const res = await api('/zentao/api/update/import', {
+              method: 'POST',
+              headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+              body: JSON.stringify({ name: file.name, data }),
+            });
+            if (!res || !res.ok) throw new Error((res && res.error) || '导入更新包失败');
+            setUpdateState({
+              checking: false,
+              text: '已更新到 v' + (res.version || '') + '，请重启 DeepSeek Harness 生效',
+              tone: 'ok',
+              available: '',
+            });
+          } catch (error) {
+            setUpdateState({ checking: false, text: error.message, tone: 'error', available: '' });
+          }
+        };
+        reader.onerror = () => setUpdateState({ checking: false, text: '读取更新包失败', tone: 'error', available: '' });
+        reader.readAsDataURL(file);
+      };
+
+      const checkForUpdates = async () => {
+        if (updateState.checking) return;
+        setUpdateState({ checking: true, text: '正在检查更新…', tone: '', available: '' });
+        try {
+          const res = await api('/zentao/api/update/check');
+          if (!res || !res.ok) throw new Error((res && res.error) || '检查更新失败');
+          const info = res.update || {};
+          if (!info.hasUpdate) {
+            setUpdateState({ checking: false, text: '当前已是最新版本 v' + (info.current || ''), tone: 'ok', available: '' });
+            return;
+          }
+          setUpdateState({ checking: false, text: '发现新版本 v' + info.latest + '，正在自动更新…', tone: 'info', available: info.latest });
+          const applied = await api('/zentao/api/update/apply', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: '{}',
+          });
+          if (!applied || !applied.ok) throw new Error((applied && applied.error) || '自动更新失败');
+          if (applied.upToDate) {
+            setUpdateState({ checking: false, text: '当前已是最新版本', tone: 'ok', available: '' });
+            return;
+          }
+          setUpdateState({
+            checking: false,
+            text: '已更新到 v' + (applied.version || info.latest) + '，请重启 DeepSeek Harness 生效',
+            tone: 'ok',
+            available: '',
+          });
+        } catch (error) {
+          setUpdateState({ checking: false, text: error.message, tone: 'error', available: '' });
+        }
+      };
+
+      useEffect(() => {
+        if (!taskModal) return undefined;
+        const previous = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+          document.body.style.overflow = previous;
+        };
+      }, [taskModal]);
+
+      useEffect(() => {
+        const dialog = modalDialogRef.current;
+        if (!dialog) return;
+        if (taskModal && !dialog.open) {
+          try {
+            dialog.showModal();
+          } catch (error) {
+            /* already open */
+          }
+        }
+        if (!taskModal && dialog.open) dialog.close();
+      }, [taskModal]);
+
+      const completeTask = async (task) => {
+        if (!task || task.done || completingTasks.includes(task.id)) return;
+        // 先请求禅道，成功返回后再更新界面（失败保持未完成）
+        setCompletingTasks((prev) => prev.concat([task.id]));
+        try {
+          const res = await api('/zentao/api/task-status', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({ id: task.id, statusKey: 'done' }),
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || '完成任务失败');
+          setMyTasks((prev) =>
+            Object.assign({}, prev, {
+              tasks: prev.tasks.map((item) =>
+                item.id === task.id ? Object.assign({}, item, { done: true, status: 'done', statusText: '已完成' }) : item,
+              ),
+            }),
+          );
+          loadMyTasks(true);
+          loadDashboard(true);
+          if (selection.executionId) loadItems(selection.executionId, true);
+        } catch (error) {
+          setActionError(error.message);
+          loadMyTasks(true);
+        } finally {
+          setCompletingTasks((prev) => prev.filter((id) => id !== task.id));
+        }
+      };
+
+      const moveTaskDeadline = async (task, date) => {
+        if (!task || !date || task.deadline === date) return;
+        setMyTasks((prev) => Object.assign({}, prev, {
+          tasks: prev.tasks.map((item) => (item.id === task.id ? Object.assign({}, item, { deadline: date }) : item)),
+        }));
+        try {
+          const res = await api('/zentao/api/task-deadline', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({ id: task.id, deadline: date }),
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || '修改截止日期失败');
+          loadMyTasks(true);
+          loadDashboard(true);
+        } catch (error) {
+          setActionError(error.message);
+          loadMyTasks(true);
+        }
+      };
+
+      const openTaskModal = async (date) => {
+        setTaskModal({
+          date,
+          title: '',
+          description: '',
+          deadline: date,
+          executionId: '',
+          projectId: 0,
+          assignedTo: '',
+          iterationOpen: false,
+          iterationQuery: '',
+          assigneeOpen: false,
+          storyOpen: false,
+          storyQuery: '',
+          storyId: '',
+          stories: [],
+          loadingStories: false,
+          users: [],
+          iterations: [],
+          loading: true,
+          loadingUsers: false,
+          submitting: false,
+          error: '',
+        });
+        try {
+          const res = await api('/zentao/api/iterations');
+          if (!res || !res.ok) throw new Error((res && res.error) || '读取迭代列表失败');
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { iterations: res.iterations || [], loading: false }) : prev));
+        } catch (error) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { loading: false, error: error.message }) : prev));
+        }
+      };
+
+      const loadTaskModalUsers = async (executionId) => {
+        if (!executionId) return;
+        setTaskModal((prev) => (prev ? Object.assign({}, prev, { loadingUsers: true }) : prev));
+        try {
+          const res = await api('/zentao/api/iteration-users?executionId=' + executionId);
+          if (!res || !res.ok) throw new Error((res && res.error) || '读取指派人失败');
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { users: res.users || [], loadingUsers: false }) : prev));
+        } catch (error) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { loadingUsers: false, error: error.message }) : prev));
+        }
+      };
+
+      const loadTaskModalStories = async (executionId) => {
+        if (!executionId) return;
+        setTaskModal((prev) => (prev ? Object.assign({}, prev, { loadingStories: true, stories: [] }) : prev));
+        try {
+          const res = await api('/zentao/api/items?type=story&executionId=' + executionId);
+          if (!res || !res.ok) throw new Error((res && res.error) || '读取迭代需求失败');
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { stories: res.items || [], loadingStories: false }) : prev));
+        } catch (error) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { loadingStories: false, error: error.message }) : prev));
+        }
+      };
+
+      const submitTaskModal = async () => {
+        if (!taskModal || taskModal.submitting) return;
+        const title = String(taskModal.title || '').trim();
+        if (!title) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { error: '请填写任务标题' }) : prev));
+          return;
+        }
+        const iteration = (taskModal.iterations || []).find((item) => item.id === Number(taskModal.executionId));
+        if (!iteration) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { error: '请选择迭代' }) : prev));
+          return;
+        }
+        if (!taskModal.assignedTo) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { error: '请选择指派人' }) : prev));
+          return;
+        }
+        if (!taskModal.deadline) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { error: '请选择截止日期' }) : prev));
+          return;
+        }
+        setTaskModal((prev) => (prev ? Object.assign({}, prev, { submitting: true, error: '' }) : prev));
+        try {
+          const res = await api('/zentao/api/task-create', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({
+              title,
+              description: String(taskModal.description || '').trim(),
+              assignedTo: taskModal.assignedTo,
+              deadline: taskModal.deadline || taskModal.date,
+              executionId: iteration.id,
+              projectId: iteration.projectId,
+              storyId: Number(taskModal.storyId) || 0,
+            }),
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || '创建任务失败');
+          setTaskModal(null);
+          loadMyTasks(true);
+          loadDashboard(true);
+          if (selection.executionId === iteration.id) loadItems(selection.executionId, true);
+        } catch (error) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { submitting: false, error: error.message }) : prev));
+        }
+      };
+
+      const switchView = (next) => {
+        setView(next);
+        if (next === 'dashboard') loadDashboard(false);
+      };
 
       const refreshAll = useCallback(async () => {
         setTreeBusy(true);
@@ -1181,30 +1779,71 @@ window.__ModuleLoader__.load({
         }
       }, [filter, projects, execs, loadExecs]);
 
-      const toggleShowClosed = () => {
-        const next = !showClosed;
-        setShowClosed(next);
+      const toggleShowActiveOnly = () => {
+        const next = !showActiveOnly;
+        setShowActiveOnly(next);
         try {
-          localStorage.setItem(SHOW_CLOSED_KEY, next ? '1' : '0');
+          localStorage.setItem(SHOW_ACTIVE_KEY, next ? '1' : '0');
         } catch (error) {
           /* storage unavailable */
         }
-        if (!next) {
+        // Turning the filter on hides non-active items: drop a stale selection.
+        if (next) {
           const project = projects.find((p) => p.id === selection.projectId);
           const execution = (execs[selection.projectId] || []).find((e) => e.id === selection.executionId);
           const hidden =
-            (project && project.status === 'closed') || (execution && execution.status === 'closed');
+            (project && project.status !== 'doing') || (execution && execution.status !== 'doing');
           if (selection.executionId && hidden) {
             setSelection({ projectId: 0, projectName: '', executionId: 0, executionName: '' });
-            setItems({ story: [], bug: [] });
+            setItems({ story: [], bug: [], task: [], testtask: [], report: [] });
           }
         }
+      };
+
+      const toggleAllProjects = () => {
+        const ids = visibleProjects.map(({ project }) => project.id);
+        if (!ids.length) return;
+        const allOpen = ids.every((id) => !!openProjects[id]);
+        if (allOpen) {
+          setOpenProjects({});
+          return;
+        }
+        const next = Object.assign({}, openProjects);
+        ids.forEach((id) => {
+          next[id] = true;
+          if (!execs[id]) loadExecs(Number(id));
+        });
+        setOpenProjects(next);
       };
 
       const toggleProject = (project) => {
         const open = !!openProjects[project.id];
         setOpenProjects((prev) => Object.assign({}, prev, { [project.id]: !open }));
         if (!open && !execs[project.id]) loadExecs(project.id);
+      };
+
+      const togglePinned = (project, execution) => {
+        setPinned((prev) => {
+          const exists = prev.some((item) => item.executionId === execution.id);
+          const next = exists
+            ? prev.filter((item) => item.executionId !== execution.id)
+            : prev.concat({
+                projectId: project.id,
+                projectName: project.name,
+                executionId: execution.id,
+                executionName: execution.name,
+              });
+          savePinned(next);
+          return next;
+        });
+      };
+
+      const unpinExecution = (executionId) => {
+        setPinned((prev) => {
+          const next = prev.filter((item) => item.executionId !== executionId);
+          savePinned(next);
+          return next;
+        });
       };
 
       const selectExecution = (project, execution) => {
@@ -1214,6 +1853,8 @@ window.__ModuleLoader__.load({
           executionId: execution.id,
           executionName: execution.name,
         });
+        // 在仪表盘页点击左侧迭代：直接切到该迭代的列表页
+        setView('list');
         loadItems(execution.id);
       };
 
@@ -1373,8 +2014,13 @@ window.__ModuleLoader__.load({
         async (text, action) => {
           if (busyRef.current) return;
           const trimmed = String(text || '').trim();
-          if (!trimmed && !action) return;
-          const userText = trimmed || actionLabel(action);
+          const imagesToSend = pendingImages.map((image) => ({
+            name: image.name,
+            mimeType: image.mimeType,
+            data: image.data,
+          }));
+          if (!trimmed && !action && !imagesToSend.length) return;
+          const userText = trimmed || (imagesToSend.length ? '（图片）' : actionLabel(action));
           const assistantId = uid('msg');
           const quickFlow =
             action &&
@@ -1389,11 +2035,19 @@ window.__ModuleLoader__.load({
             ((action && action.type === 'choice' && action.value === 'cancel') || (!action && /^取消$/.test(trimmed)));
           setMessages((prev) =>
             prev.concat([
-              { id: uid('msg'), role: 'user', text: userText, cards: [], at: Date.now() },
+              {
+                id: uid('msg'),
+                role: 'user',
+                text: userText,
+                cards: [],
+                images: imagesToSend.map((image) => ({ name: image.name })),
+                at: Date.now(),
+              },
               { id: assistantId, role: 'assistant', text: '', cards: [], at: Date.now() },
             ]),
           );
           setInput('');
+          if (imagesToSend.length) setPendingImages([]);
           setBusy(true);
           setStatusText('');
           const pendingEdit = pendingEditRef.current;
@@ -1403,6 +2057,7 @@ window.__ModuleLoader__.load({
             text: trimmed,
             action: action && action.type === 'quick' && action.value === 'doc' ? { type: 'quick', value: 'doc' } : action || null,
             edit: pendingEdit,
+            images: imagesToSend,
             contexts,
             selection: Object.assign({}, selection, { contexts }),
             ...(action && action.type === 'quick' && action.value === 'doc'
@@ -1410,6 +2065,7 @@ window.__ModuleLoader__.load({
               : {}),
           };
           let createdSomething = false;
+          let taskCreated = false;
           let adopted = null;
           try {
             const res = await fetch('/zentao/api/chat', {
@@ -1427,6 +2083,7 @@ window.__ModuleLoader__.load({
                 setStatusText('');
               } else if (event.type === 'card') {
                 if (event.card && event.card.kind === 'result' && event.card.data && event.card.data.ok) createdSomething = true;
+                if (event.card && event.card.kind === 'task-result') taskCreated = true;
                 const createdExecution =
                   event.card && event.card.kind === 'result' && event.card.data ? event.card.data.executionCreated : null;
                 if (createdExecution && createdExecution.projectId) {
@@ -1531,9 +2188,13 @@ window.__ModuleLoader__.load({
               if (projectId) loadExecs(projectId);
               if (executionId) loadItems(executionId);
             }
+            if (taskCreated) {
+              loadMyTasks(true);
+              loadDashboard(true);
+            }
           }
         },
-        [contexts, selection, messages, loadTree, loadExecs, loadItems],
+        [contexts, selection, messages, pendingImages, loadTree, loadExecs, loadItems, loadMyTasks, loadDashboard],
       );
 
       useEffect(() => {
@@ -1573,8 +2234,9 @@ window.__ModuleLoader__.load({
           const next = side === 'left' ? startW + dx : startW - dx;
           setLayout((prev) => {
             const other = side === 'left' ? (prev.rightOpen ? prev.rightW : 40) : prev.leftOpen ? prev.leftW : 40;
-            // Keep at least 240px for the middle column; never overflow the pane.
-            const limit = Math.max(side === 'left' ? 200 : 260, width - other - 240);
+            // 中间列保底 560px：列表/仪表盘不会被拖拽挤没
+            const splitters = 16; // 左右两条拖拽分隔条
+            const limit = Math.max(side === 'left' ? 200 : 260, width - other - 560 - splitters);
             if (side === 'left') return Object.assign({}, prev, { leftW: clamp(next, 200, Math.min(560, limit)) });
             return Object.assign({}, prev, { rightW: clamp(next, 260, Math.min(640, limit)) });
           });
@@ -1598,14 +2260,14 @@ window.__ModuleLoader__.load({
         event.stopPropagation();
         const table = event.currentTarget.closest('table');
         const headers = table ? Array.from(table.querySelectorAll('thead th')) : [];
-        const snapshot = {};
+        const snapshot = Object.assign({}, colWidths || {});
         headers.forEach((th) => {
           const key = th.getAttribute('data-col');
-          const def = SORT_COLUMNS.find((column) => column.key === key);
+          const def = ACTIVE_COLUMNS.find((item) => item.key === key);
           const width = Math.round(th.getBoundingClientRect().width);
           if (def && width > 0) snapshot[def.key] = width;
         });
-        const startWidth = snapshot[column.key] || COL_WIDTH_LIMITS.min;
+        const startWidth = Math.round(event.currentTarget.parentElement.getBoundingClientRect().width) || snapshot[column.key] || COL_WIDTH_LIMITS.min;
         const startX = event.clientX;
         let latest = snapshot;
         setColWidths(snapshot);
@@ -1665,12 +2327,18 @@ window.__ModuleLoader__.load({
         const assignee = String((item && item.assignedTo) || '').trim().toLowerCase();
         return Boolean(assignee) && mineLabels.includes(assignee);
       };
-      const visibleStories = onlyMine ? items.story.filter(isMine) : items.story;
-      const visibleBugs = onlyMine ? items.bug.filter(isMine) : items.bug;
-      const list = tab === 'bug' ? visibleBugs : visibleStories;
+      // 「只看我」只作用于有指派人的列表；测试单/测试报告没有指派人概念。
+      const visibleList = (type) =>
+        onlyMine && (type === 'story' || type === 'bug' || type === 'task') ? items[type].filter(isMine) : items[type];
+      const visibleStories = visibleList('story');
+      const visibleBugs = visibleList('bug');
+      const visibleTask = visibleList('task');
+      const visibleTesttask = visibleList('testtask');
+      const visibleReport = visibleList('report');
+      const list = visibleList(tab);
 
       // Sortable columns mirror the table headers; values are what the user sees.
-      const SORT_COLUMNS = [
+      const CORE_COLUMNS = [
         { key: 'id', label: 'ID', className: 'zt-col-id', type: 'number', value: (i) => Number(i.id) || 0 },
         { key: 'title', label: '标题', className: 'zt-col-title', type: 'text', value: (i) => i.title || '' },
         { key: 'module', label: '模块', className: 'zt-col-module', type: 'text', value: (i) => i.moduleName || '' },
@@ -1696,15 +2364,53 @@ window.__ModuleLoader__.load({
         },
       ];
 
-      // Column order is user-controlled (drag the header), defaulting to the
-      // declaration order; every cell renders through these per-key renderers.
+      const TASK_COLUMNS = [
+        { key: 'id', label: 'ID', className: 'zt-col-id', type: 'number', value: (i) => Number(i.id) || 0 },
+        { key: 'title', label: '任务名称', className: 'zt-col-title', type: 'text', value: (i) => i.title || '' },
+        { key: 'module', label: '所属模块', className: 'zt-col-module', type: 'text', value: (i) => i.moduleName || '' },
+        { key: 'priority', label: '优先级', className: 'zt-col-priority', type: 'number', value: (i) => (i.priority ? Number(i.priority) : null) },
+        { key: 'status', label: '状态', className: 'zt-col-state', type: 'text', value: (i) => i.statusText || '' },
+        { key: 'assignee', label: '指派给', className: 'zt-col-assignee', type: 'text', value: (i) => i.assignedTo || '' },
+        { key: 'deadline', label: '截止', className: 'zt-col-deadline', type: 'text', value: (i) => i.deadline || '' },
+      ];
+
+      const TESTTASK_COLUMNS = [
+        { key: 'id', label: 'ID', className: 'zt-col-id', type: 'number', value: (i) => Number(i.id) || 0 },
+        { key: 'title', label: '测试单名称', className: 'zt-col-title', type: 'text', value: (i) => i.title || '' },
+        { key: 'status', label: '状态', className: 'zt-col-state', type: 'text', value: (i) => i.statusText || '' },
+        { key: 'owner', label: '负责人', className: 'zt-col-owner', type: 'text', value: (i) => i.owner || '' },
+        { key: 'begin', label: '开始', className: 'zt-col-date', type: 'text', value: (i) => i.begin || '' },
+        { key: 'end', label: '结束', className: 'zt-col-date', type: 'text', value: (i) => i.end || '' },
+      ];
+
+      const REPORT_COLUMNS = [
+        { key: 'id', label: 'ID', className: 'zt-col-id', type: 'number', value: (i) => Number(i.id) || 0 },
+        { key: 'title', label: '测试报告名称', className: 'zt-col-title', type: 'text', value: (i) => i.title || '' },
+        { key: 'testtaskName', label: '关联测试单', className: 'zt-col-testtask', type: 'text', value: (i) => i.testtaskName || '' },
+        { key: 'date', label: '日期', className: 'zt-col-date', type: 'text', value: (i) => i.date || '' },
+      ];
+
+      const TAB_LABELS = { story: '研发需求', bug: 'BUG', task: '任务', testtask: '测试单', report: '测试报告' };
+      const TAB_COUNTS = {
+        story: visibleStories.length,
+        bug: visibleBugs.length,
+        task: visibleTask.length,
+        testtask: visibleTesttask.length,
+        report: visibleReport.length,
+      };
+      const isCoreTab = tab === 'story' || tab === 'bug';
+      const ACTIVE_COLUMNS =
+        tab === 'task' ? TASK_COLUMNS : tab === 'testtask' ? TESTTASK_COLUMNS : tab === 'report' ? REPORT_COLUMNS : CORE_COLUMNS;
+
+      // Column order/width is user-controlled for the story/bug tables only.
       const columnOrder = colOrder && colOrder.length === COLUMN_KEYS.length ? colOrder : COLUMN_KEYS;
       const orderedColumns = columnOrder
-        .map((key) => SORT_COLUMNS.find((column) => column.key === key))
+        .map((key) => CORE_COLUMNS.find((column) => column.key === key))
         .filter(Boolean);
-      const storyStateColumn = SORT_COLUMNS.find((column) => column.key === 'storyState');
-      const visibleColumns =
-        tab === 'story'
+      const storyStateColumn = CORE_COLUMNS.find((column) => column.key === 'storyState');
+      const visibleColumns = !isCoreTab
+        ? ACTIVE_COLUMNS
+        : tab === 'story'
           ? (() => {
               const index = orderedColumns.findIndex((column) => column.key === 'status');
               if (index < 0) return orderedColumns.concat([storyStateColumn]);
@@ -1713,7 +2419,11 @@ window.__ModuleLoader__.load({
           : orderedColumns;
 
       const statusLabel = (item) =>
-        (item.type === 'story' ? item.stage || item.statusText : item.resolution || item.statusText) || '—';
+        (item.type === 'story'
+          ? item.stage || item.statusText
+          : item.type === 'task' || item.type === 'testtask'
+            ? item.statusText
+            : item.resolution || item.statusText) || '—';
       const renderCell = (item, key) => {
         if (key === 'id') return h('td', { key, className: 'zt-mono' }, item.id);
         if (key === 'title') {
@@ -1789,6 +2499,30 @@ window.__ModuleLoader__.load({
               h('span', { className: 'zt-cell-text' + (isMine(item) ? ' zt-cell-me' : '') }, item.assignedTo || '未指派'),
             ),
           );
+        }
+        if (key === 'deadline') {
+          return h(
+            'td',
+            { key, className: 'zt-col-deadline' },
+            h(
+              'button',
+              {
+                className: 'zt-cell-action',
+                type: 'button',
+                title: '点击修改截止日期',
+                onClick: (event) => openCellEditor(item, 'deadline', event),
+              },
+              h('span', { className: 'zt-cell-text' }, item.deadline || '—'),
+            ),
+          );
+        }
+        if (key === 'owner' || key === 'begin' || key === 'end' || key === 'testtaskName' || key === 'date') {
+          const text =
+            key === 'owner' ? item.owner || '—' : key === 'testtaskName' ? item.testtaskName || '—' : key === 'date' ? item.date || '—' : item[key] || '—';
+          return h('td', { key }, h('span', { className: 'zt-cell-text' }, text));
+        }
+        if (item.type !== 'story' && item.type !== 'bug' && item.type !== 'task') {
+          return h('td', { key }, h('span', { className: 'zt-tag zt-tag-' + statusTone(item.status) }, statusLabel(item)));
         }
         return h(
           'td',
@@ -2243,6 +2977,57 @@ window.__ModuleLoader__.load({
           setCellEditor(null);
           setActionError(message);
         };
+        if (item.type === 'task' && field === 'status') {
+          api('/zentao/api/task-status-options?id=' + item.id)
+            .then((data) => {
+              if (!data || !data.ok) throw new Error((data && data.error) || '读取任务状态失败');
+              const options = data.options || [];
+              if (!options.length) throw new Error('当前账号没有可执行的任务状态操作');
+              setCellEditor((prev) =>
+                prev && prev.item === item && prev.field === field
+                  ? Object.assign({}, prev, {
+                      options: options.map((option) => ({ value: option.key, label: option.label })),
+                      loading: false,
+                    })
+                  : prev,
+              );
+            })
+            .catch((error) => fail(error.message));
+          return;
+        }
+        if (item.type === 'task' && field === 'assignee') {
+          api('/zentao/api/task-assign-options?id=' + item.id)
+            .then((data) => {
+              if (!data || !data.ok) throw new Error((data && data.error) || '读取可指派成员失败');
+              const users = data.users || [];
+              if (!users.length) throw new Error('没有可指派的成员');
+              setCellEditor((prev) =>
+                prev && prev.item === item && prev.field === field
+                  ? Object.assign({}, prev, {
+                      options: users.map((user) => ({ value: user.value, label: user.label })),
+                      loading: false,
+                    })
+                  : prev,
+              );
+            })
+            .catch((error) => fail(error.message));
+          return;
+        }
+        if (field === 'deadline' && item.type === 'task') {
+          const today = new Date().toISOString().slice(0, 10);
+          setCellEditor({
+            item,
+            field,
+            x: rect.left,
+            y: rect.bottom + 6,
+            options: [],
+            loading: false,
+            busy: false,
+            dateMode: true,
+            dateValue: item.deadline && /^\d{4}-\d{2}-\d{2}$/.test(item.deadline) ? item.deadline : today,
+          });
+          return;
+        }
         if (field === 'status') {
           const load = statusMenu ? Promise.resolve({ ok: true, options: statusMenu }) : api('/zentao/api/status-options');
           load
@@ -2312,7 +3097,21 @@ window.__ModuleLoader__.load({
         setCellEditor(Object.assign({}, editor, { busy: true }));
         try {
           let result;
-          if (editor.field === 'status' || editor.field === 'storyStatus') {
+          if (editor.field === 'status' && editor.item.type === 'task') {
+            result = await api('/zentao/api/task-status', {
+              method: 'POST',
+              headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+              body: JSON.stringify({ id: editor.item.id, statusKey: option.value }),
+            });
+            if (!result.ok) throw new Error(result.error || '任务状态修改失败');
+          } else if (editor.field === 'assignee' && editor.item.type === 'task') {
+            result = await api('/zentao/api/task-assignee', {
+              method: 'POST',
+              headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+              body: JSON.stringify({ id: editor.item.id, assignedTo: option.value }),
+            });
+            if (!result.ok) throw new Error(result.error || '任务指派失败');
+          } else if (editor.field === 'status' || editor.field === 'storyStatus') {
             result = await api('/zentao/api/status', {
               method: 'POST',
               headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
@@ -2342,6 +3141,30 @@ window.__ModuleLoader__.load({
         }
       };
 
+      const submitTaskDeadline = async () => {
+        const editor = cellEditor;
+        if (!editor || editor.field !== 'deadline' || editor.busy) return;
+        const value = String(editor.dateValue || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+          setActionError('请选择截止日期');
+          return;
+        }
+        setCellEditor(Object.assign({}, editor, { busy: true }));
+        try {
+          const result = await api('/zentao/api/task-deadline', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({ id: editor.item.id, deadline: value }),
+          });
+          if (!result.ok) throw new Error(result.error || '截止日期修改失败');
+          setCellEditor(null);
+          if (selection.executionId) await loadItems(selection.executionId, true);
+        } catch (error) {
+          setCellEditor(null);
+          setActionError(error.message);
+        }
+      };
+
       const moveColumn = (fromKey, toKey, side) => {
         if (!fromKey || !toKey || fromKey === toKey) return;
         const order = orderedColumns.map((column) => column.key).filter((key) => key !== fromKey);
@@ -2360,7 +3183,7 @@ window.__ModuleLoader__.load({
       // Empty cells always sink to the bottom, in both directions.
       const sortedList = (() => {
         if (!sort.key) return list;
-        const column = SORT_COLUMNS.find((c) => c.key === sort.key);
+        const column = ACTIVE_COLUMNS.find((c) => c.key === sort.key);
         if (!column) return list;
         const direction = sort.dir === 'desc' ? -1 : 1;
         const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
@@ -2382,8 +3205,9 @@ window.__ModuleLoader__.load({
       const query = filter.trim().toLowerCase();
       const hit = (id, name) =>
         !query || String(name || '').toLowerCase().indexOf(query) >= 0 || String(id).indexOf(query) >= 0;
-      const showProject = (project) => showClosed || project.status !== 'closed';
-      const showExecution = (execution) => showClosed || execution.status !== 'closed';
+      // "显示进行中": only items whose status is doing; off shows everything.
+      const showProject = (project) => !showActiveOnly || project.status === 'doing';
+      const showExecution = (execution) => !showActiveOnly || execution.status === 'doing';
       const visibleProjects = projects
         .filter(showProject)
         .map((project) => {
@@ -2419,6 +3243,804 @@ window.__ModuleLoader__.load({
         );
       }
 
+      const renderCalendar = () => {
+        const isWeek = calendarMode === 'week';
+        const pad = (value) => String(value).padStart(2, '0');
+        const dateKeyOf = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+        const today = new Date();
+        const todayKey = dateKeyOf(today);
+        const byDate = new Map();
+        for (const task of myTasks.tasks || []) {
+          if (!task.deadline) continue;
+          if (!byDate.has(task.deadline)) byDate.set(task.deadline, []);
+          byDate.get(task.deadline).push(task);
+        }
+        const weekNames = ['一', '二', '三', '四', '五', '六', '日'];
+        const buildCell = (date) => {
+          const key = dateKeyOf(date);
+          const weekend = date.getDay() === 0 || date.getDay() === 6;
+          return h(
+            'div',
+            {
+              key,
+              className:
+                'zt-cal-cell' +
+                (weekend ? ' zt-cal-weekend' : '') +
+                (key === todayKey ? ' zt-cal-today' : '') +
+                (key === selectedDate ? ' zt-cal-selected' : ''),
+              onClick: () => setSelectedDate(key),
+              onDoubleClick: () => openTaskModal(key),
+              onDragOver: (event) => event.preventDefault(),
+              onDrop: (event) => {
+                event.preventDefault();
+                const task = dragTaskRef.current;
+                dragTaskRef.current = null;
+                if (task) moveTaskDeadline(task, key);
+              },
+            },
+            (() => {
+              const calLabel = lunarLabelOf(date);
+              return h(
+                'div',
+                { className: 'zt-cal-day' },
+                h(
+                  'span',
+                  { className: 'zt-cal-day-left' },
+                  h('span', { className: 'zt-cal-day-num' }, date.getDate()),
+                  CN_DAY_TAGS[key]
+                    ? h(
+                        'span',
+                        {
+                          className:
+                            'zt-cal-holiday ' + (CN_DAY_TAGS[key] === '休' ? 'zt-cal-holiday-rest' : 'zt-cal-holiday-work'),
+                        },
+                        CN_DAY_TAGS[key],
+                      )
+                    : null,
+                ),
+                calLabel
+                  ? h(
+                      'span',
+                      { className: 'zt-cal-lunar zt-cal-lunar-' + calLabel.type },
+                      calLabel.text,
+                    )
+                  : null,
+              );
+            })(),
+            h(
+              'div',
+              { className: 'zt-cal-tasks' + (isWeek ? '' : ' zt-cal-tasks-month') },
+              (byDate.get(key) || [])
+                .slice()
+                .sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0))
+                .slice(0, isWeek ? undefined : 3)
+                .map((task) => {
+                  const chipClass =
+                    'zt-cal-task' +
+                    (isWeek ? ' zt-cal-task-week' : ' zt-cal-task-month') +
+                    (task.done ? ' zt-cal-task-done' : '');
+                  const link = h(
+                    'a',
+                    {
+                      className: 'zt-cal-task-link',
+                      href: baseUrl + task.url,
+                      target: '_blank',
+                      rel: 'noreferrer noopener',
+                      title: task.title,
+                      draggable: false,
+                      onClick: (event) => event.stopPropagation(),
+                      onDoubleClick: (event) => event.stopPropagation(),
+                    },
+                    task.title,
+                  );
+                  if (isWeek) {
+                    return h(
+                      'div',
+                      {
+                        key: task.id,
+                        className: chipClass,
+                        draggable: !task.done,
+                        onDragStart: task.done
+                          ? undefined
+                          : () => {
+                              dragTaskRef.current = task;
+                            },
+                        onDragEnd: () => {
+                          dragTaskRef.current = null;
+                        },
+                        onDoubleClick: (event) => event.stopPropagation(),
+                      },
+                      h('input', {
+                        type: 'checkbox',
+                        className: 'zt-cal-task-check',
+                        checked: Boolean(task.done),
+                        disabled: Boolean(task.done) || completingTasks.includes(task.id),
+                        'aria-label': '标记完成：' + task.title,
+                        onClick: (event) => event.stopPropagation(),
+                        onChange: () => completeTask(task),
+                      }),
+                      link,
+                    );
+                  }
+                  return h(
+                    'a',
+                    {
+                      key: task.id,
+                      className: chipClass,
+                      href: baseUrl + task.url,
+                      target: '_blank',
+                      rel: 'noreferrer noopener',
+                      title: task.title,
+                      draggable: !task.done,
+                      onDragStart: task.done
+                        ? undefined
+                        : () => {
+                            dragTaskRef.current = task;
+                          },
+                      onDragEnd: () => {
+                        dragTaskRef.current = null;
+                      },
+                      onDoubleClick: (event) => event.stopPropagation(),
+                    },
+                    task.title,
+                  );
+                }),
+            ),
+          );
+        };
+        let cells = [];
+        let titleText = '';
+        if (!isWeek) {
+          const year = calendarMonth.year;
+          const month = calendarMonth.month;
+          const first = new Date(year, month - 1, 1);
+          const startOffset = (first.getDay() + 6) % 7;
+          const days = new Date(year, month, 0).getDate();
+          for (let i = 0; i < startOffset; i += 1) {
+            cells.push(h('div', { key: 'blank-' + i, className: 'zt-cal-cell zt-cal-blank' }));
+          }
+          for (let day = 1; day <= days; day += 1) {
+            cells.push(buildCell(new Date(year, month - 1, day)));
+          }
+          while (cells.length < 42) cells.push(h('div', { key: 'tail-' + cells.length, className: 'zt-cal-cell zt-cal-blank' }));
+          titleText = year + ' 年 ' + month + ' 月';
+        } else {
+          const anchor = weekAnchor ? new Date(weekAnchor + 'T00:00:00') : today;
+          const monday = new Date(anchor);
+          monday.setDate(anchor.getDate() - ((anchor.getDay() + 6) % 7));
+          for (let i = 0; i < 7; i += 1) {
+            const date = new Date(monday);
+            date.setDate(monday.getDate() + i);
+            cells.push(buildCell(date));
+          }
+          const sunday = new Date(monday);
+          sunday.setDate(monday.getDate() + 6);
+          titleText =
+            monday.getFullYear() +
+            ' 年 ' +
+            (monday.getMonth() + 1) +
+            ' 月 ' +
+            monday.getDate() +
+            ' 日 - ' +
+            (sunday.getMonth() + 1) +
+            ' 月 ' +
+            sunday.getDate() +
+            ' 日';
+        }
+        const shift = (delta) => {
+          if (isWeek) {
+            const anchor = weekAnchor ? new Date(weekAnchor + 'T00:00:00') : new Date(today);
+            anchor.setDate(anchor.getDate() + delta * 7);
+            setWeekAnchor(dateKeyOf(anchor));
+            setCalendarMonth({ year: anchor.getFullYear(), month: anchor.getMonth() + 1 });
+          } else {
+            setCalendarMonth((prev) => {
+              const next = new Date(prev.year, prev.month - 1 + delta, 1);
+              return { year: next.getFullYear(), month: next.getMonth() + 1 };
+            });
+          }
+        };
+        const goToday = () => {
+          const now = new Date();
+          setCalendarMonth({ year: now.getFullYear(), month: now.getMonth() + 1 });
+          setSelectedDate(dateKeyOf(now));
+          setWeekAnchor(dateKeyOf(now));
+        };
+        return h(
+          'section',
+          { className: 'zt-cal', 'aria-label': '任务日历' },
+          h(
+            'div',
+            { className: 'zt-cal-head' },
+            h(
+              'div',
+              { className: 'zt-cal-title-wrap' },
+              h('div', { className: 'zt-cal-title' }, '任务日历'),
+              h('div', { className: 'zt-cal-sub' }, '双击日期空白处新建任务，拖动任务可改截止日期'),
+            ),
+            h(
+              'div',
+              { className: 'zt-cal-actions' },
+                h(
+                  'div',
+                  { className: 'zt-cal-mode', role: 'tablist', 'aria-label': '日历视图' },
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      role: 'tab',
+                      className: 'zt-cal-mode-btn' + (isWeek ? ' zt-cal-mode-btn-active' : ''),
+                      'aria-selected': isWeek ? 'true' : 'false',
+                      onClick: () => {
+                        setWeekAnchor(selectedDate || dateKeyOf(today));
+                        setCalendarMode('week');
+                      },
+                    },
+                    '周视图',
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      role: 'tab',
+                      className: 'zt-cal-mode-btn' + (!isWeek ? ' zt-cal-mode-btn-active' : ''),
+                      'aria-selected': !isWeek ? 'true' : 'false',
+                      onClick: () => setCalendarMode('month'),
+                    },
+                    '月视图',
+                  ),
+                ),
+              h(
+                'button',
+                {
+                  className: 'zt-icon-btn',
+                  type: 'button',
+                  title: isWeek ? '上一周' : '上个月',
+                  'aria-label': isWeek ? '上一周' : '上个月',
+                  onClick: () => shift(-1),
+                },
+                h(GlyphIcon, { name: 'chevron-left', size: 16 }),
+              ),
+              h('span', { className: 'zt-cal-month' }, titleText),
+              h(
+                'button',
+                {
+                  className: 'zt-icon-btn',
+                  type: 'button',
+                  title: isWeek ? '下一周' : '下个月',
+                  'aria-label': isWeek ? '下一周' : '下个月',
+                  onClick: () => shift(1),
+                },
+                h(GlyphIcon, { name: 'chevron-right', size: 16 }),
+              ),
+              h(
+                'button',
+                {
+                  className: 'zt-icon-btn' + (myTasks.loading ? ' zt-spinning' : ''),
+                  type: 'button',
+                  title: myTasks.loading ? '刷新中…' : '刷新日历任务',
+                  'aria-label': '刷新日历任务',
+                  disabled: myTasks.loading,
+                  onClick: () => loadMyTasks(true),
+                },
+                h(GlyphIcon, { name: 'refresh', size: 16 }),
+              ),
+              h('button', { className: 'zt-cal-today-btn', type: 'button', onClick: goToday }, '回到今天'),
+            ),
+          ),
+          myTasks.error
+            ? h('div', { className: 'zt-cal-error' }, '刷新任务失败：' + myTasks.error)
+            : null,
+          h(
+            'div',
+            { className: 'zt-cal-grid' + (isWeek ? ' zt-cal-grid-week' : '') },
+            ['一', '二', '三', '四', '五', '六', '日'].map((label) =>
+              h(
+                'div',
+                { key: label, className: 'zt-cal-week' + (label === '六' || label === '日' ? ' zt-cal-week-weekend' : '') },
+                '周' + label,
+              ),
+            ),
+            cells,
+          ),
+        );
+      };
+
+      const renderTaskModal = () => {
+        if (!taskModal) return null;
+        const iterations = taskModal.iterations || [];
+        const users = taskModal.users || [];
+        const selectedIteration = iterations.find((item) => item.id === Number(taskModal.executionId));
+        const selectedUser = users.find((user) => user.value === taskModal.assignedTo);
+        const stories = taskModal.stories || [];
+        const selectedStory = stories.find((item) => item.id === Number(taskModal.storyId));
+        const storyQuery = String(taskModal.storyQuery || '').trim().toLowerCase();
+        const filteredStories = stories.filter(
+          (item) => !storyQuery || ('#' + item.id + ' ' + item.title).toLowerCase().includes(storyQuery),
+        );
+        const query = String(taskModal.iterationQuery || '').trim().toLowerCase();
+        const matchIteration = (item) =>
+          !query || ((item.projectName || '') + ' / ' + (item.name || '')).toLowerCase().includes(query);
+        const doingIterations = iterations.filter((item) => item.status === 'doing' && matchIteration(item));
+        const waitIterations = iterations.filter((item) => item.status === 'wait' && matchIteration(item));
+        const closeDropdowns = () =>
+          setTaskModal((prev) =>
+            prev ? Object.assign({}, prev, { iterationOpen: false, assigneeOpen: false, storyOpen: false }) : prev,
+          );
+        const fieldLabel = (text, required) =>
+          h(
+            'span',
+            { className: 'zt-field-label' },
+            required ? h('span', { className: 'zt-field-required', 'aria-hidden': true }, '*') : null,
+            h('span', { className: 'zt-field-label-text' }, text),
+          );
+        const statusPill = (status) =>
+          h(
+            'span',
+            { className: 'zt-option-status' },
+            h('span', { className: 'zt-status-dot zt-status-dot-' + (status === 'doing' ? 'doing' : 'wait') }),
+            h('span', { className: 'zt-option-status-text' }, status === 'doing' ? '进行中' : '未开始'),
+          );
+        const renderIterationGroup = (label, items) =>
+          items.length
+            ? [
+                h('div', { key: 'group-' + label, className: 'zt-select-group' }, label),
+                ...items.map((item) =>
+                  h(
+                    'button',
+                    {
+                      key: 'iter-' + item.id,
+                      type: 'button',
+                      className:
+                        'zt-select-option' + (Number(taskModal.executionId) === item.id ? ' zt-select-option-active' : ''),
+                      onClick: (event) => {
+                        event.stopPropagation();
+                        const executionId = item.id;
+                        setTaskModal((prev) =>
+                          prev
+                            ? Object.assign({}, prev, {
+                                executionId: String(executionId),
+                                projectId: item.projectId,
+                                assignedTo: '',
+                                users: [],
+                                storyId: '',
+                                storyQuery: '',
+                                stories: [],
+                                storyOpen: false,
+                                iterationOpen: false,
+                                iterationQuery: '',
+                                error: '',
+                              })
+                            : prev,
+                        );
+                        loadTaskModalUsers(executionId);
+                        loadTaskModalStories(executionId);
+                      },
+                    },
+                    h('span', { className: 'zt-select-option-label' }, (item.projectName ? item.projectName + ' / ' : '') + item.name),
+                    statusPill(item.status),
+                  ),
+                ),
+              ]
+            : [];
+        return h(
+          'dialog',
+          {
+            className: 'zt-modal-dialog',
+            ref: modalDialogRef,
+            'aria-label': '新建任务',
+            onCancel: (event) => {
+              event.preventDefault();
+              setTaskModal(null);
+            },
+          },
+          h(
+            'div',
+            {
+              className: 'zt-modal',
+              role: 'dialog',
+              'aria-modal': 'true',
+              'aria-label': '新建任务',
+              onClick: (event) => event.stopPropagation(),
+            },
+            h(
+              'div',
+              { className: 'zt-modal-head' },
+              h('span', { className: 'zt-modal-title' }, '新建任务'),
+              h(
+                'button',
+                { className: 'zt-modal-close', type: 'button', title: '关闭', 'aria-label': '关闭', onClick: () => setTaskModal(null) },
+                h(GlyphIcon, { name: 'close', size: 16 }),
+              ),
+            ),
+            h(
+              'div',
+              { className: 'zt-modal-body', onClick: closeDropdowns },
+              h(
+                'label',
+                { className: 'zt-field' },
+                fieldLabel('任务标题', true),
+                h('input', {
+                  className: 'zt-input',
+                  type: 'text',
+                  value: taskModal.title,
+                  placeholder: '请输入任务标题',
+                  autoFocus: true,
+                  onChange: (event) => setTaskModal((prev) => (prev ? Object.assign({}, prev, { title: event.target.value, error: '' }) : prev)),
+                }),
+              ),
+              h(
+                'div',
+                {
+                  className: 'zt-field',
+                  onClick: (event) => event.stopPropagation(),
+                },
+                fieldLabel('迭代', true),
+                h(
+                  'div',
+                  { className: 'zt-select-field' + (taskModal.iterationOpen ? ' zt-select-field-open' : '') },
+                  h(
+                    'button',
+                    {
+                      className: 'zt-select-trigger' + (taskModal.loading ? ' zt-select-trigger-disabled' : ''),
+                      type: 'button',
+                      disabled: taskModal.loading,
+                      'aria-haspopup': 'listbox',
+                      'aria-expanded': taskModal.iterationOpen ? 'true' : 'false',
+                      onClick: () =>
+                        setTaskModal((prev) =>
+                          prev
+                            ? Object.assign({}, prev, {
+                                iterationOpen: !prev.iterationOpen,
+                                iterationQuery: '',
+                                assigneeOpen: false,
+                              })
+                            : prev,
+                        ),
+                    },
+                    selectedIteration
+                      ? h(
+                          'span',
+                          { className: 'zt-select-value' },
+                          (selectedIteration.projectName ? selectedIteration.projectName + ' / ' : '') + selectedIteration.name,
+                        )
+                      : h('span', { className: 'zt-select-placeholder' }, taskModal.loading ? '正在读取迭代…' : '请选择迭代'),
+                    h('span', { className: 'zt-select-arrow' }, h(GlyphIcon, { name: 'chevron-down', size: 16 })),
+                  ),
+                  taskModal.iterationOpen
+                    ? h(
+                        'div',
+                        { className: 'zt-select-popup', role: 'listbox' },
+                        h('div', { className: 'zt-select-search-wrap', onClick: (event) => event.stopPropagation() },
+                          h('input', {
+                            className: 'zt-select-search',
+                            type: 'search',
+                            placeholder: '输入关键词筛选迭代…',
+                            value: taskModal.iterationQuery || '',
+                            autoFocus: true,
+                            onChange: (event) =>
+                              setTaskModal((prev) => (prev ? Object.assign({}, prev, { iterationQuery: event.target.value }) : prev)),
+                            onKeyDown: (event) => {
+                              if (event.key === 'Escape') {
+                                event.stopPropagation();
+                                setTaskModal((prev) => (prev ? Object.assign({}, prev, { iterationOpen: false }) : prev));
+                              }
+                            },
+                          }),
+                        ),
+                        doingIterations.length || waitIterations.length
+                          ? [
+                              ...renderIterationGroup('进行中', doingIterations),
+                              ...renderIterationGroup('未开始', waitIterations),
+                            ]
+                          : h('div', { className: 'zt-select-empty' }, query ? '没有匹配的迭代' : '暂无可用迭代'),
+                      )
+                    : null,
+                ),
+              ),
+              h(
+                'div',
+                { className: 'zt-field', onClick: (event) => event.stopPropagation() },
+                fieldLabel('关联研发需求', false),
+                h(
+                  'div',
+                  { className: 'zt-select-field' + (taskModal.storyOpen ? ' zt-select-field-open' : '') },
+                  h(
+                    'button',
+                    {
+                      className:
+                        'zt-select-trigger' +
+                        (!taskModal.executionId || taskModal.loadingStories ? ' zt-select-trigger-disabled' : ''),
+                      type: 'button',
+                      disabled: !taskModal.executionId || taskModal.loadingStories,
+                      'aria-haspopup': 'listbox',
+                      'aria-expanded': taskModal.storyOpen ? 'true' : 'false',
+                      onClick: () =>
+                        setTaskModal((prev) =>
+                          prev
+                            ? Object.assign({}, prev, {
+                                storyOpen: !prev.storyOpen,
+                                storyQuery: '',
+                                iterationOpen: false,
+                                assigneeOpen: false,
+                              })
+                            : prev,
+                        ),
+                    },
+                    selectedStory
+                      ? h(
+                          'span',
+                          { className: 'zt-select-value' },
+                          '#' + selectedStory.id + ' ' + selectedStory.title,
+                        )
+                      : h(
+                          'span',
+                          { className: 'zt-select-placeholder' },
+                          !taskModal.executionId
+                            ? '请先选择迭代'
+                            : taskModal.loadingStories
+                              ? '正在读取需求…'
+                              : '选填，可关联该迭代下的研发需求',
+                        ),
+                    h('span', { className: 'zt-select-arrow' }, h(GlyphIcon, { name: 'chevron-down', size: 16 })),
+                  ),
+                  taskModal.storyOpen
+                    ? h(
+                        'div',
+                        { className: 'zt-select-popup', role: 'listbox' },
+                        h(
+                          'div',
+                          { className: 'zt-select-search-wrap', onClick: (event) => event.stopPropagation() },
+                          h('input', {
+                            className: 'zt-select-search',
+                            type: 'search',
+                            placeholder: '输入关键词筛选研发需求…',
+                            value: taskModal.storyQuery || '',
+                            autoFocus: true,
+                            onChange: (event) =>
+                              setTaskModal((prev) => (prev ? Object.assign({}, prev, { storyQuery: event.target.value }) : prev)),
+                          }),
+                        ),
+                        filteredStories.length
+                          ? filteredStories.map((item) =>
+                              h(
+                                'button',
+                                {
+                                  key: 'story-' + item.id,
+                                  type: 'button',
+                                  className:
+                                    'zt-select-option' + (Number(taskModal.storyId) === item.id ? ' zt-select-option-active' : ''),
+                                  onClick: (event) => {
+                                    event.stopPropagation();
+                                    setTaskModal((prev) =>
+                                      prev
+                                        ? Object.assign({}, prev, {
+                                            storyId: String(item.id),
+                                            storyOpen: false,
+                                            storyQuery: '',
+                                          })
+                                        : prev,
+                                    );
+                                  },
+                                },
+                                h('span', { className: 'zt-select-option-label' }, '#' + item.id + ' ' + item.title),
+                              ),
+                            )
+                          : h(
+                              'div',
+                              { className: 'zt-select-empty' },
+                              storyQuery ? '没有匹配的研发需求' : '该迭代下暂无研发需求',
+                            ),
+                      )
+                    : null,
+                ),
+              ),
+              h(
+                'div',
+                { className: 'zt-field', onClick: (event) => event.stopPropagation() },
+                fieldLabel('指派给', true),
+                h(
+                  'div',
+                  { className: 'zt-select-field' + (taskModal.assigneeOpen ? ' zt-select-field-open' : '') },
+                  h(
+                    'button',
+                    {
+                      className:
+                        'zt-select-trigger' +
+                        (!taskModal.executionId || taskModal.loadingUsers ? ' zt-select-trigger-disabled' : ''),
+                      type: 'button',
+                      disabled: !taskModal.executionId || taskModal.loadingUsers,
+                      'aria-haspopup': 'listbox',
+                      'aria-expanded': taskModal.assigneeOpen ? 'true' : 'false',
+                      onClick: () =>
+                        setTaskModal((prev) =>
+                          prev
+                            ? Object.assign({}, prev, { assigneeOpen: !prev.assigneeOpen, iterationOpen: false })
+                            : prev,
+                        ),
+                    },
+                    selectedUser
+                      ? h('span', { className: 'zt-select-value' }, selectedUser.label)
+                      : h(
+                          'span',
+                          { className: 'zt-select-placeholder' },
+                          !taskModal.executionId ? '请先选择迭代' : taskModal.loadingUsers ? '正在读取成员…' : '请选择指派人',
+                        ),
+                    h('span', { className: 'zt-select-arrow' }, h(GlyphIcon, { name: 'chevron-down', size: 16 })),
+                  ),
+                  taskModal.assigneeOpen
+                    ? h(
+                        'div',
+                        { className: 'zt-select-popup', role: 'listbox' },
+                        users.length
+                          ? users.map((user) =>
+                              h(
+                                'button',
+                                {
+                                  key: 'user-' + user.value,
+                                  type: 'button',
+                                  className:
+                                    'zt-select-option' + (taskModal.assignedTo === user.value ? ' zt-select-option-active' : ''),
+                                  onClick: (event) => {
+                                    event.stopPropagation();
+                                    setTaskModal((prev) => (prev ? Object.assign({}, prev, { assignedTo: user.value, assigneeOpen: false }) : prev));
+                                  },
+                                },
+                                h('span', { className: 'zt-select-option-label' }, user.label),
+                              ),
+                            )
+                          : h('div', { className: 'zt-select-empty' }, '暂无可指派成员'),
+                      )
+                    : null,
+                ),
+              ),
+              h(
+                'label',
+                { className: 'zt-field' },
+                fieldLabel('截止日期', true),
+                h('input', {
+                  className: 'zt-input',
+                  type: 'date',
+                  value: taskModal.deadline,
+                  onChange: (event) => setTaskModal((prev) => (prev ? Object.assign({}, prev, { deadline: event.target.value }) : prev)),
+                }),
+              ),
+              h(
+                'label',
+                { className: 'zt-field' },
+                fieldLabel('任务描述', false),
+                h('textarea', {
+                  className: 'zt-textarea',
+                  rows: 3,
+                  value: taskModal.description || '',
+                  placeholder: '选填，补充任务背景或验收点',
+                  onChange: (event) =>
+                    setTaskModal((prev) => (prev ? Object.assign({}, prev, { description: event.target.value }) : prev)),
+                }),
+              ),
+              taskModal.error ? h('div', { className: 'zt-field-error' }, taskModal.error) : null,
+            ),
+            h(
+              'div',
+              { className: 'zt-modal-foot' },
+              h('button', { className: 'zt-btn zt-btn-ghost', type: 'button', onClick: () => setTaskModal(null) }, '取消'),
+              h(
+                'button',
+                { className: 'zt-btn zt-btn-primary', type: 'button', disabled: taskModal.submitting, onClick: submitTaskModal },
+                taskModal.submitting ? '创建中…' : '确定',
+              ),
+            ),
+          ),
+        );
+      };
+
+      const renderDashboard = () => {
+        const data = dashboard.data;
+        const range = data ? data.weekStart + ' ~ ' + data.weekEnd : '';
+        const cards = [
+          { key: 'story', label: '研发需求' },
+          { key: 'bug', label: 'BUG' },
+          { key: 'task', label: '任务' },
+        ];
+        const lists = [
+          { key: 'story', label: '本周待完成的研发需求' },
+          { key: 'bug', label: '本周待完成的 BUG' },
+          { key: 'task', label: '本周待完成的任务' },
+        ];
+        return h(
+          'div',
+          { className: 'zt-dash-inner' },
+          h('div', { className: 'zt-dash-dragbar', 'aria-hidden': true }),
+          h(
+            'div',
+            { className: 'zt-dash-top' },
+            h(
+              'div',
+              { className: 'zt-dash-title-wrap' },
+              h('div', { className: 'zt-dash-title' }, '我的仪表盘'),
+              h(
+                'div',
+                { className: 'zt-dash-sub' },
+                (range ? '本周 ' + range + ' · ' : '') + '只看指派给我的未完成事项',
+              ),
+            ),
+            h(
+              'button',
+              {
+                className: 'zt-icon-btn' + (dashboard.loading ? ' zt-spinning' : ''),
+                type: 'button',
+                title: '刷新仪表盘',
+                'aria-label': '刷新仪表盘',
+                disabled: dashboard.loading,
+                onClick: () => {
+                  loadDashboard(true);
+                  loadMyTasks(true);
+                },
+              },
+              h(GlyphIcon, { name: 'refresh', size: 16 }),
+            ),
+          ),
+          dashboard.error ? h('div', { className: 'zt-dash-error' }, '加载失败：' + dashboard.error) : null,
+          !data && dashboard.loading ? h('div', { className: 'zt-dash-loading' }, '正在统计本周待办…') : null,
+          data
+            ? h(
+                'div',
+                { className: 'zt-dash-cards' },
+                cards.map((card) =>
+                  h(
+                    'div',
+                    { key: card.key, className: 'zt-dash-card zt-dash-card-' + card.key },
+                    h('div', { className: 'zt-dash-card-label' }, card.label),
+                    h('div', { className: 'zt-dash-card-count' }, String((data.totals && data.totals[card.key]) || 0)),
+                    h('div', { className: 'zt-dash-card-meta' }, '本周未完成'),
+                  ),
+                ),
+              )
+            : null,
+          data
+            ? h(
+                'div',
+                { className: 'zt-dash-lists' },
+                lists.map((section) => {
+                  const rows = (data.lists && data.lists[section.key]) || [];
+                  return h(
+                    'div',
+                    { key: section.key, className: 'zt-dash-list' },
+                    h(
+                      'div',
+                      { className: 'zt-dash-list-head zt-dash-list-head-' + section.key },
+                      h('span', { className: 'zt-dash-list-label' }, section.label),
+                      h('span', { className: 'zt-dash-list-count' }, String(rows.length)),
+                    ),
+                    h(
+                      'div',
+                      { className: 'zt-dash-list-body' },
+                      rows.length
+                        ? rows.map((item) =>
+                            h(
+                              'a',
+                              {
+                                key: section.key + '-' + item.id,
+                                className: 'zt-dash-row',
+                                href: baseUrl + item.url,
+                                target: '_blank',
+                                rel: 'noreferrer noopener',
+                                title: '在禅道打开',
+                              },
+                              h('span', { className: 'zt-dash-row-title' }, item.title),
+                              h('span', { className: 'zt-dash-row-date' }, item.deadline || '—'),
+                            ),
+                          )
+                        : h('div', { className: 'zt-dash-empty' }, '暂无'),
+                    ),
+                  );
+                }),
+              )
+            : null,
+          data ? renderCalendar() : null,
+        );
+      };
+
       const cellPopup = (() => {
         if (!cellEditor) return null;
         const width = 240;
@@ -2444,11 +4066,45 @@ window.__ModuleLoader__.load({
               { className: 'zt-popup-head' },
               cellEditor.field === 'module'
                 ? '修改模块'
-                : cellEditor.field === 'status' || cellEditor.field === 'storyStatus'
-                  ? cellEditor.item.type === 'bug' ? '修改方案' : '修改状态'
-                  : '指派给',
+                : cellEditor.field === 'deadline'
+                  ? '修改截止日期'
+                  : cellEditor.field === 'status' || cellEditor.field === 'storyStatus'
+                    ? cellEditor.item.type === 'bug'
+                      ? '修改方案'
+                      : cellEditor.item.type === 'task'
+                        ? '修改任务状态'
+                        : '修改状态'
+                    : '指派给',
             ),
-            cellEditor.loading
+            cellEditor.field === 'deadline'
+              ? h(
+                  'div',
+                  { className: 'zt-popup-date' },
+                  h('input', {
+                    type: 'date',
+                    className: 'zt-popup-date-input',
+                    value: cellEditor.dateValue || '',
+                    disabled: !!cellEditor.busy,
+                    onChange: (e) =>
+                      setCellEditor((prev) => (prev && prev.field === 'deadline' ? Object.assign({}, prev, { dateValue: e.target.value }) : prev)),
+                  }),
+                  h(
+                    'div',
+                    { className: 'zt-popup-date-actions' },
+                    h(
+                      'button',
+                      {
+                        className: 'zt-popup-date-btn zt-popup-date-primary',
+                        type: 'button',
+                        disabled: !!cellEditor.busy,
+                        onClick: submitTaskDeadline,
+                      },
+                      '保存',
+                    ),
+                    h('button', { className: 'zt-popup-date-btn', type: 'button', onClick: closeCellEditor }, '取消'),
+                  ),
+                )
+              : cellEditor.loading
               ? h('div', { className: 'zt-popup-loading' }, '加载中…')
               : h(
                   'div',
@@ -2482,6 +4138,7 @@ window.__ModuleLoader__.load({
             // target content x ≈ 84px, and the collapsed rail eats 48px of that.
             '--zt-pane-head-pad': Math.max(16, 8 + lightsPad) + 'px',
             '--zt-main-head-pad': Math.max(16, lightsPad - 32) + 'px',
+            '--zt-left-w': (layout.leftOpen ? layout.leftW : 0) + 'px',
           },
           className:
             'zt-root' +
@@ -2491,6 +4148,7 @@ window.__ModuleLoader__.load({
           ref: rootRef,
         },
         h('style', { key: 'zt-style' }, CSS),
+        taskModal ? renderTaskModal() : null,
         layout.leftOpen
           ? h(
               'aside',
@@ -2501,6 +4159,32 @@ window.__ModuleLoader__.load({
                 h(
                   'div',
                   { className: 'zt-head-actions' },
+                  h(
+                    'div',
+                    { className: 'zt-view-switch', role: 'tablist', 'aria-label': '页面切换' },
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        role: 'tab',
+                        'aria-selected': view === 'dashboard' ? 'true' : 'false',
+                        className: 'zt-view-btn' + (view === 'dashboard' ? ' zt-view-btn-active' : ''),
+                        onClick: () => (view === 'dashboard' ? loadDashboard(true) : switchView('dashboard')),
+                      },
+                      '仪表盘',
+                    ),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        role: 'tab',
+                        'aria-selected': view === 'list' ? 'true' : 'false',
+                        className: 'zt-view-btn' + (view === 'list' ? ' zt-view-btn-active' : ''),
+                        onClick: () => switchView('list'),
+                      },
+                      '列表',
+                    ),
+                  ),
                   h(
                     'button',
                     {
@@ -2551,7 +4235,7 @@ window.__ModuleLoader__.load({
                       ),
                     )
                   : [
-                      h('span', { key: 'label', className: 'zt-tree-filter-label' }, '显示已关闭'),
+                      h('span', { key: 'label', className: 'zt-tree-filter-label' }, '显示进行中'),
                       h(
                         'div',
                         { key: 'actions', className: 'zt-tree-filter-actions' },
@@ -2568,19 +4252,67 @@ window.__ModuleLoader__.load({
                         h(
                           'button',
                           {
-                            className: 'zt-switch' + (showClosed ? ' zt-switch-on' : ''),
+                            className: 'zt-switch' + (showActiveOnly ? ' zt-switch-on' : ''),
                             type: 'button',
                             role: 'switch',
-                            'aria-checked': showClosed ? 'true' : 'false',
-                            'aria-label': '显示已关闭的项目与迭代',
-                            title: showClosed ? '隐藏已关闭的项目/迭代' : '显示已关闭的项目/迭代',
-                            onClick: toggleShowClosed,
+                            'aria-checked': showActiveOnly ? 'true' : 'false',
+                            'aria-label': '只显示进行中的项目和迭代',
+                            title: showActiveOnly ? '显示全部项目/迭代' : '只显示进行中的项目/迭代',
+                            onClick: toggleShowActiveOnly,
                           },
                           h('span', { className: 'zt-switch-handle', 'aria-hidden': true }),
                         ),
                       ),
                     ],
               ),
+                !query && pinned.length
+                  ? h(
+                      'div',
+                      { className: 'zt-pinned' },
+                      h('div', { className: 'zt-pinned-head' }, '置顶'),
+                      pinned.map((item) =>
+                        h(
+                          'div',
+                          {
+                            key: 'pin-' + item.executionId,
+                            className:
+                              'zt-tree-row zt-pinned-row' + (selection.executionId === item.executionId ? ' zt-active' : ''),
+                            title: item.projectName ? item.projectName + ' / ' + item.executionName : item.executionName,
+                            draggable: true,
+                            onDragStart: (event) =>
+                              onDragStart(event, {
+                                type: 'execution',
+                                id: item.executionId,
+                                title: item.executionName,
+                                projectId: item.projectId,
+                                projectName: item.projectName,
+                              }),
+                            onClick: () =>
+                              selectExecution(
+                                { id: item.projectId, name: item.projectName },
+                                { id: item.executionId, name: item.executionName },
+                              ),
+                          },
+                          h('span', { className: 'zt-tree-icon zt-pinned-icon' }, h(GlyphIcon, { name: 'bookmark', size: 16 })),
+                          h('span', { className: 'zt-name' }, item.executionName),
+                          h(
+                            'button',
+                            {
+                              className: 'zt-pinned-unpin',
+                              type: 'button',
+                              title: '取消置顶',
+                              'aria-label': '取消置顶',
+                              onClick: (event) => {
+                                event.stopPropagation();
+                                unpinExecution(item.executionId);
+                              },
+                            },
+                            h(GlyphIcon, { name: 'close', size: 14 }),
+                          ),
+                        ),
+                      ),
+                    )
+                  : null,
               h(
                 'div',
                 { className: 'zt-tree-head' },
@@ -2597,6 +4329,22 @@ window.__ModuleLoader__.load({
                     ? h('span', { className: 'zt-tree-head-arrow' }, h(GlyphIcon, { name: treeSort.dir === 1 ? 'arrow-up' : 'arrow-down', size: 16 }))
                     : null,
                 ),
+                (() => {
+                  const ids = visibleProjects.map(({ project }) => project.id);
+                  const allOpen = ids.length > 0 && ids.every((id) => !!openProjects[id]);
+                  return h(
+                    'button',
+                    {
+                      className: 'zt-tree-head-btn zt-tree-head-toggle',
+                      type: 'button',
+                      title: allOpen ? '折叠全部项目' : '展开全部项目',
+                      'aria-label': allOpen ? '折叠全部项目' : '展开全部项目',
+                      disabled: Boolean(query),
+                      onClick: toggleAllProjects,
+                    },
+                    h(GlyphIcon, { name: allOpen ? 'fold-vertical' : 'unfold-vertical', size: 16 }),
+                  );
+                })(),
                 h(
                   'button',
                   {
@@ -2616,7 +4364,9 @@ window.__ModuleLoader__.load({
                 'div',
                 { className: 'zt-tree' },
                 treeError ? h('div', { className: 'zt-empty' }, '加载失败：' + treeError) : null,
-                !treeError && projects.length === 0 ? h('div', { className: 'zt-empty' }, '暂无可见项目') : null,
+                !treeError && projects.length === 0
+                  ? h('div', { className: 'zt-empty' }, showActiveOnly ? '暂无进行中的项目' : '暂无可见项目')
+                  : null,
                 !treeError && query && visibleProjects.length === 0
                   ? h('div', { className: 'zt-empty' }, '没有匹配的项目或迭代')
                   : null,
@@ -2681,6 +4431,21 @@ window.__ModuleLoader__.load({
                                 onClick: () => selectExecution(project, exec),
                               },
                               h('span', { className: 'zt-name', title: exec.name }, exec.name),
+                              h(
+                                'button',
+                                {
+                                  className:
+                                    'zt-tree-pin' + (pinned.some((item) => item.executionId === exec.id) ? ' zt-tree-pin-active' : ''),
+                                  type: 'button',
+                                  title: pinned.some((item) => item.executionId === exec.id) ? '取消置顶' : '置顶该迭代',
+                                  'aria-label': pinned.some((item) => item.executionId === exec.id) ? '取消置顶' : '置顶该迭代',
+                                  onClick: (event) => {
+                                    event.stopPropagation();
+                                    togglePinned(project, exec);
+                                  },
+                                },
+                                h(GlyphIcon, { name: 'bookmark', size: 14 }),
+                              ),
                               h('span', { className: 'zt-status' }, h(StatusDot, { status: exec.status }), exec.statusText || ''),
                             ),
                           ),
@@ -2689,7 +4454,75 @@ window.__ModuleLoader__.load({
                   );
                 }),
               ),
-              h('div', { className: 'zt-plugin-version', title: '禅道 AI 工作台版本' }, PLUGIN_VERSION),
+              h(
+                'div',
+                { className: 'zt-left-foot' },
+                h(
+                  'div',
+                  { className: 'zt-version-line' },
+                  h('span', { className: 'zt-plugin-version', title: '禅道 AI 工作台版本' }, PLUGIN_VERSION),
+                  h(
+                    'button',
+                    {
+                      className: 'zt-check-update' + (updateState.available ? ' zt-check-update-new' : ''),
+                      type: 'button',
+                      disabled: updateState.checking,
+                      onClick: checkForUpdates,
+                    },
+                    updateState.checking ? '检查中…' : '检查更新',
+                    updateState.available ? h('span', { className: 'zt-update-dot', 'aria-hidden': true }) : null,
+                  ),
+                  h(
+                    'button',
+                    {
+                      className: 'zt-check-update',
+                      type: 'button',
+                      disabled: updateState.checking,
+                      title: '选择本地 zip 更新包，直接安装',
+                      onClick: () => importUpdateInputRef.current && importUpdateInputRef.current.click(),
+                    },
+                    '导入更新包',
+                  ),
+                  h('input', {
+                    ref: importUpdateInputRef,
+                    type: 'file',
+                    accept: '.zip,application/zip',
+                    style: { display: 'none' },
+                    onChange: onImportUpdateSelected,
+                  }),
+                ),
+                h(
+                  'button',
+                  {
+                    className: 'zt-icon-btn zt-bell-btn',
+                    type: 'button',
+                    title: assignEvents.unread ? '指派提醒（' + assignEvents.unread + ' 条未读）' : '指派提醒',
+                    'aria-label': '指派提醒',
+                    onClick: () => setAssignMenuOpen((v) => !v),
+                  },
+                  h(GlyphIcon, { name: 'bell', size: 16 }),
+                  assignEvents.unread ? h('span', { className: 'zt-bell-dot', 'aria-hidden': true }) : null,
+                ),
+                updateState.text
+                  ? h(
+                      'div',
+                      { className: 'zt-update-pop zt-update-pop-' + (updateState.tone || 'info') },
+                      h('span', { className: 'zt-update-pop-text' }, updateState.text),
+                      h(
+                        'button',
+                        {
+                          className: 'zt-update-pop-close',
+                          type: 'button',
+                          title: '关闭',
+                          'aria-label': '关闭',
+                          onClick: () => setUpdateState((prev) => Object.assign({}, prev, { text: '', available: '' })),
+                        },
+                        h(GlyphIcon, { name: 'close', size: 12 }),
+                      ),
+                    )
+                  : null,
+                assignMenuOpen ? renderAssignMenu() : null,
+              ),
             )
           : h(
               'div',
@@ -2708,24 +4541,27 @@ window.__ModuleLoader__.load({
         layout.leftOpen ? h('div', { className: 'zt-split', onMouseDown: (e) => startDrag('left', e) }) : null,
         h(
           'main',
-          { className: 'zt-main' },
+          { className: 'zt-main' + (view === 'dashboard' ? ' zt-main-dashboard' : '') },
+          view === 'dashboard' ? h('div', { className: 'zt-main-dragstrip', 'aria-hidden': true }) : null,
+          view === 'dashboard' ? h('div', { className: 'zt-dashboard' }, renderDashboard()) : null,
           h(
             'div',
             { className: 'zt-main-head' },
             h(
               'div',
               { className: 'zt-tabs' },
-              h(
-                'button',
-                { className: 'zt-tab' + (tab === 'story' ? ' zt-tab-active' : ''), onClick: () => setTab('story') },
-                '研发需求',
-                h('span', { className: 'zt-count' }, visibleStories.length),
-              ),
-              h(
-                'button',
-                { className: 'zt-tab' + (tab === 'bug' ? ' zt-tab-active' : ''), onClick: () => setTab('bug') },
-                'BUG',
-                h('span', { className: 'zt-count' }, visibleBugs.length),
+              ['story', 'bug', 'task', 'testtask', 'report'].map((key) =>
+                h(
+                  'button',
+                  {
+                    key,
+                    className: 'zt-tab' + (tab === key ? ' zt-tab-active' : ''),
+                    type: 'button',
+                    onClick: () => setTab(key),
+                  },
+                  TAB_LABELS[key],
+                  h('span', { className: 'zt-count' }, TAB_COUNTS[key]),
+                ),
               ),
             ),
             h(
@@ -2801,7 +4637,7 @@ window.__ModuleLoader__.load({
             !listError && selection.executionId && !loading && list.length === 0
               ? h(EmptyState, {
                   icon: tab === 'bug' ? 'bug' : 'file',
-                  title: onlyMine ? '暂无指派给我的' + (tab === 'bug' ? 'BUG' : '研发需求') : tab === 'bug' ? '暂无BUG' : '暂无研发需求',
+                  title: onlyMine ? '暂无指派给我的' + TAB_LABELS[tab] : '暂无' + TAB_LABELS[tab],
                 })
               : null,
             list.length
@@ -2814,14 +4650,7 @@ window.__ModuleLoader__.load({
                           // Resized columns keep their px widths, but the table
                           // still fills the pane: extra space is distributed
                           // instead of leaving a blank area on the right.
-                          width:
-                            'max(100%, ' +
-                            visibleColumns.reduce(
-                              (sum, column) =>
-                                sum + (column.virtual ? colWidths[column.key] || 72 : colWidths[column.key] || 80),
-                              0,
-                            ) +
-                            'px)',
+                          width: '100%',
                         }
                       : undefined,
                   },
@@ -2845,6 +4674,36 @@ window.__ModuleLoader__.load({
                       null,
                       visibleColumns.map((column) => {
                         const active = sort.key === column.key;
+                        if (!isCoreTab) {
+                          return h(
+                            'th',
+                            {
+                              key: column.key,
+                              'data-col': column.key,
+                              className: column.className + (active ? ' zt-th-sorted zt-th-sorted-' + sort.dir : ''),
+                              'aria-sort': active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none',
+                              title: '点击按「' + column.label + '」排序，拖动右边缘调整列宽',
+                            },
+                            h(
+                              'button',
+                              { className: 'zt-th-btn', type: 'button', onClick: () => toggleSort(column.key) },
+                              h('span', { className: 'zt-th-label' }, column.label),
+                              active
+                                ? h(
+                                    'span',
+                                    { className: 'zt-sort', 'aria-hidden': true },
+                                    h(GlyphIcon, { name: sort.dir === 'asc' ? 'arrow-up' : 'arrow-down', size: 16 }),
+                                  )
+                                : null,
+                            ),
+                            h('span', {
+                              className: 'zt-col-resize',
+                              title: '拖动调整列宽，双击恢复默认列宽',
+                              onMouseDown: (e) => startColResize(e, column),
+                              onDoubleClick: resetColWidths,
+                            }),
+                          );
+                        }
                         if (column.virtual) {
                           return h(
                             'th',
@@ -2986,23 +4845,6 @@ window.__ModuleLoader__.load({
                   h(
                     'button',
                     {
-                      className: 'zt-icon-btn zt-bell-btn',
-                      title: '指派提醒',
-                      'aria-label': '指派提醒',
-                      onClick: () => setAssignMenuOpen((v) => !v),
-                    },
-                    h(GlyphIcon, { name: 'bell', size: 16 }),
-                    assignEvents.unread
-                      ? h(
-                          'span',
-                          { className: 'zt-btn-badge' },
-                          assignEvents.unread > 99 ? '99+' : String(assignEvents.unread),
-                        )
-                      : null,
-                  ),
-                  h(
-                    'button',
-                    {
                       className: 'zt-icon-btn',
                       title: '历史会话',
                       'aria-label': '历史会话',
@@ -3015,7 +4857,6 @@ window.__ModuleLoader__.load({
                 ),
               ),
               historyOpen ? renderHistoryMenu() : null,
-              assignMenuOpen ? renderAssignMenu() : null,
               h(
                 'div',
                 { className: 'zt-chat', ref: scrollRef },
@@ -3039,6 +4880,15 @@ window.__ModuleLoader__.load({
                           : msg.role === 'assistant' && msg.cards.length === 0 && !busy
                             ? null
                             : null,
+                        msg.role === 'user' && msg.images && msg.images.length
+                          ? h(
+                              'div',
+                              { className: 'zt-msg-image-names' },
+                              msg.images.map((image, index) =>
+                                h('span', { key: index, className: 'zt-msg-image-name' }, '🖼 ' + (image.name || '图片')),
+                              ),
+                            )
+                          : null,
                         msg.role === 'user' && msg.text
                           ? h(
                               'div',
@@ -3099,6 +4949,30 @@ window.__ModuleLoader__.load({
                       ),
                     )
                   : null,
+                pendingImages.length
+                  ? h(
+                      'div',
+                      { className: 'zt-image-chips' },
+                      pendingImages.map((image, index) =>
+                        h(
+                          'div',
+                          { key: index, className: 'zt-image-chip', title: image.name },
+                          h('img', { src: image.preview, alt: image.name }),
+                          h(
+                            'button',
+                            {
+                              type: 'button',
+                              className: 'zt-image-chip-x',
+                              title: '移除图片',
+                              'aria-label': '移除图片',
+                              onClick: () => removePendingImage(index),
+                            },
+                            h(GlyphIcon, { name: 'close', size: 12 }),
+                          ),
+                        ),
+                      ),
+                    )
+                  : null,
                 renderComposerMenu(),
                 h(
                   'div',
@@ -3121,6 +4995,7 @@ window.__ModuleLoader__.load({
                     },
                     onDragLeave: () => setDropActive(false),
                     onDrop,
+                    onPaste: handleImagePaste,
                     onKeyDown: (e) => {
                       if (e.key === 'Escape' && composerMenu) {
                         e.preventDefault();
@@ -3518,6 +5393,64 @@ window.__ModuleLoader__.load({
           ),
         );
       }
+      if (kind === 'task-plan') {
+        const tasks = Array.isArray(d.tasks) ? d.tasks : [];
+        return h(
+          'div',
+          { className: 'zt-card' },
+          h(
+            'div',
+            { className: 'zt-card-head' },
+            h('span', { className: 'zt-card-tag' }, '任务计划'),
+            h('span', { className: 'zt-card-title' }, tasks.length + ' 个任务'),
+          ),
+          h('div', { className: 'zt-card-sub' }, '写入迭代：' + (d.executionName || '未指定')),
+          h(
+            'div',
+            { className: 'zt-api-list' },
+            tasks.map((item, index) =>
+              h(
+                'div',
+                { key: index, className: 'zt-api-item' },
+                h('span', { className: 'zt-api-id' }, String(index + 1) + '.'),
+                h('span', { className: 'zt-api-name', title: item.title }, item.title || ''),
+                h(
+                  'span',
+                  { className: 'zt-api-extra' },
+                  'P' + (item.priority || 3) + ' · ' + (item.assignedTo || '未指派') + ' · ' + (item.deadline || '无截止日期'),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+      if (kind === 'task-result') {
+        const items = Array.isArray(d.items) ? d.items : [];
+        return h(
+          'div',
+          { className: 'zt-card' },
+          h(
+            'div',
+            { className: 'zt-card-head' },
+            h('span', { className: 'zt-card-tag' }, '任务创建'),
+            h('span', { className: 'zt-card-title' }, '成功 ' + (d.okCount || 0) + ' / 共 ' + (d.total || items.length) + ' 条'),
+          ),
+          h('div', { className: 'zt-card-sub' }, '迭代：' + (d.executionName || '')),
+          h(
+            'div',
+            { className: 'zt-api-list' },
+            items.map((item, index) =>
+              h(
+                'div',
+                { key: index, className: 'zt-api-item' },
+                h('span', { className: 'zt-api-id' }, item.ok ? '✓' : '✕'),
+                h('span', { className: 'zt-api-name', title: item.title }, item.title || ''),
+                item.ok ? null : h('span', { className: 'zt-api-extra zt-doc-error' }, item.error || '失败'),
+              ),
+            ),
+          ),
+        );
+      }
       if (kind === 'api-plan') {
         return h(
           'div',
@@ -3690,8 +5623,9 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-boot-hint{font:var(--td-font-body-small);color:var(--td-text-color-placeholder)}
 .zt-root *,.zt-root *:before,.zt-root *:after{box-sizing:border-box}
 .zt-pane{display:flex;flex:0 0 auto;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--td-bg-color-container)}
-.zt-left{background:var(--dsw-specific-sidebar-fill,var(--td-bg-color-secondarycontainer))}
-.zt-main{flex:1 1 0;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:#fff;container-type:inline-size}
+.zt-left{position:relative;background:var(--dsw-specific-sidebar-fill,var(--td-bg-color-secondarycontainer))}
+.zt-main{position:relative;flex:1 1 0;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:#fff;container-type:inline-size}
+.zt-main-dragstrip{position:absolute;left:0;right:0;top:0;height:14px;z-index:6;-webkit-app-region:drag}
 .zt-split{flex:0 0 8px;width:8px;cursor:col-resize;background:transparent;position:relative;z-index:2}
 .zt-split:after{content:'';position:absolute;left:50%;top:0;bottom:0;width:1px;margin-left:-0.5px;background:var(--td-component-stroke)}
 .zt-split:hover:after,.zt-split:active:after{background:var(--td-brand-color);width:2px;margin-left:-1px}
@@ -3732,14 +5666,30 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-tree{overflow:auto;flex:1;min-width:0;padding:8px;scrollbar-width:thin}
 .zt-tree-busy{font-size:12px;line-height:20px;color:var(--td-text-color-secondary);padding:4px 8px}
 .zt-tree{padding:6px 8px 10px}
-.zt-plugin-version{flex:0 0 auto;padding:7px 16px 9px;border-top:1px solid var(--td-component-stroke);font-size:11px;line-height:16px;color:var(--td-text-color-placeholder);user-select:none}
+.zt-left-foot{position:relative;flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 8px 6px 16px;border-top:1px solid var(--td-component-stroke)}
+.zt-plugin-version{flex:1 1 auto;min-width:0;padding:4px 0;font-size:11px;line-height:16px;color:var(--td-text-color-placeholder);user-select:none}
+.zt-pinned{padding:0 0 6px;margin:0 0 6px;border-bottom:1px solid var(--td-component-stroke)}
+.zt-pinned-head{display:flex;align-items:center;height:28px;padding:0 16px;color:var(--td-text-color-placeholder);font-size:12px;line-height:20px}
+.zt-pinned-row{padding-left:16px}
+.zt-pinned-icon{color:var(--td-brand-color)}
+.zt-pinned-unpin{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;margin-right:2px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--td-text-color-placeholder);cursor:pointer;opacity:0;transition:opacity .15s,color .15s,background-color .15s}
+.zt-pinned-row:hover .zt-pinned-unpin{opacity:1}
+.zt-pinned-unpin:hover{background:var(--td-bg-color-container-hover);color:var(--td-text-color-primary)}
+.zt-tree-pin{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-left:2px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--td-text-color-placeholder);cursor:pointer;opacity:0;flex:0 0 auto;transition:opacity .15s,color .15s,background-color .15s}
+.zt-tree-row:hover .zt-tree-pin{opacity:1}
+.zt-tree-pin:hover{background:var(--td-bg-color-container-hover);color:var(--td-brand-color)}
+.zt-tree-pin-active{opacity:1;color:var(--td-brand-color)}
 .zt-tree-head{display:flex;align-items:center;gap:8px;flex:0 0 auto;height:28px;padding:0 16px;color:var(--td-text-color-placeholder);font-size:12px;line-height:20px}
 .zt-tree-head-btn{display:inline-flex;align-items:center;gap:4px;min-width:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}
 .zt-tree-head-btn:hover{color:var(--td-text-color-primary)}
 .zt-tree-head-active{color:var(--td-text-color-secondary)}
 .zt-tree-head-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .zt-tree-head-arrow{display:inline-flex;color:var(--zt-icon-brand)}
-.zt-tree-head-status{margin-left:auto;min-width:62px;justify-content:flex-end}
+.zt-tree-head-btn:first-child{margin-right:auto}
+.zt-tree-head-toggle{flex:0 0 auto;padding:0 4px;color:var(--td-text-color-placeholder)}
+.zt-tree-head-toggle:hover{color:var(--td-text-color-primary)}
+.zt-tree-head-toggle:disabled{opacity:.45;cursor:default}
+.zt-tree-head-status{margin-left:4px;min-width:62px;justify-content:flex-end}
 .zt-tree-row{display:flex;align-items:center;gap:8px;height:34px;padding:0 8px;border-radius:6px;cursor:pointer;user-select:none;min-width:0;overflow:hidden;transition:background-color .12s linear}
 .zt-tree-row:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.05))}
 .zt-tree-project{font-weight:500}
@@ -3772,7 +5722,8 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-empty{padding:16px;color:var(--td-text-color-placeholder);text-align:center;font:var(--td-font-body-medium)}
 .zt-empty-sm{padding:4px 8px;text-align:left;font:var(--td-font-body-small)}
 .zt-main-head{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;padding:0 16px;border-bottom:1px solid var(--td-component-stroke);min-height:48px;min-width:0;overflow:hidden;-webkit-app-region:drag}
-.zt-tabs{display:flex;align-items:stretch;gap:0;flex:0 0 auto;min-width:0;align-self:stretch;-webkit-app-region:no-drag}
+.zt-tabs{display:flex;align-items:stretch;gap:0;flex:0 0 auto;min-width:0;align-self:stretch;-webkit-app-region:no-drag;overflow-x:auto;scrollbar-width:none}
+.zt-tabs::-webkit-scrollbar{display:none}
 .zt-tab{position:relative;display:inline-flex;align-items:center;gap:6px;height:48px;padding:0 16px;border:0;background:transparent;color:var(--td-text-color-secondary);cursor:pointer;font:var(--td-font-body-medium);white-space:nowrap;transition:background-color .2s linear}
 .zt-tab:hover{background:var(--td-bg-color-container-hover)}
 .zt-tab:focus-visible{outline:none;box-shadow:inset 0 0 0 2px var(--td-brand-color-focus)}
@@ -3781,6 +5732,152 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:var(--zt-radius);background:var(--td-bg-color-secondarycontainer);color:var(--td-text-color-secondary);font:var(--td-font-body-small);font-size:12px;line-height:18px}
 .zt-tab-active .zt-count{background:var(--td-brand-color-light);color:var(--td-brand-color)}
 .zt-main-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;flex:0 1 auto;padding:8px 0;margin-left:auto;-webkit-app-region:no-drag}
+.zt-view-switch{display:inline-flex;align-items:center;flex:0 0 auto;gap:2px;padding:2px;border:1px solid var(--td-border-level-2-color);border-radius:var(--td-radius-round,999px);background:var(--td-bg-color-container);-webkit-app-region:no-drag}
+.zt-view-btn{height:24px;padding:0 10px;border:0;border-radius:var(--td-radius-round,999px);background:transparent;color:var(--td-text-color-secondary);cursor:pointer;font-size:12px;line-height:24px;white-space:nowrap;transition:background-color .15s,color .15s}
+.zt-view-btn:hover{color:var(--td-text-color-primary)}
+.zt-view-btn-active{background:var(--td-brand-color-light);color:var(--td-text-color-brand);font-weight:500}
+.zt-main-dashboard .zt-main-head,.zt-main-dashboard .zt-table-wrap{display:none}
+.zt-main-dashboard{overflow:hidden}
+.zt-dashboard{flex:1;min-height:0;overflow:auto;padding:20px 20px 28px;background:var(--td-bg-color-container)}
+.zt-dash-inner{max-width:1120px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+.zt-dash-dragbar{height:12px;margin:-20px -20px -4px;-webkit-app-region:drag;flex:0 0 auto}
+.zt-dash-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;-webkit-app-region:drag;padding:2px 0 4px;margin:0 -20px;padding-left:20px;padding-right:20px;cursor:default}
+.zt-dash-top .zt-icon-btn{-webkit-app-region:no-drag}
+.zt-dash-title{font-size:18px;font-weight:600;color:var(--td-text-color-primary)}
+.zt-dash-sub{margin-top:4px;font-size:12px;color:var(--td-text-color-secondary)}
+.zt-dash-error{margin-top:2px;padding:10px 14px;border:1px solid var(--td-error-color-3, #ffd3d0);border-radius:var(--td-radius-default,6px);background:var(--td-error-color-1, #fff0ef);color:var(--td-error-color);font-size:12px}
+.zt-dash-loading{padding:28px 0;color:var(--td-text-color-secondary);font-size:13px}
+.zt-dash-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.zt-dash-card{position:relative;border:1px solid var(--td-component-stroke);border-radius:16px;background:var(--td-bg-color-container);padding:16px 18px 16px 20px;display:flex;flex-direction:column;gap:8px;min-width:0;box-shadow:0 2px 8px rgba(0,0,0,.06);transition:box-shadow .2s,border-color .2s,transform .2s}
+.zt-dash-card:hover{box-shadow:0 6px 16px rgba(0,0,0,.12);border-color:var(--td-border-level-2-color);transform:translateY(-1px)}
+.zt-dash-card::before{content:'';position:absolute;left:0;top:16px;bottom:16px;width:3px;border-radius:0 3px 3px 0;background:var(--td-brand-color)}
+.zt-dash-card-bug::before{background:var(--td-error-color)}
+.zt-dash-card-task::before{background:var(--td-warning-color)}
+.zt-dash-card-label{font-size:13px;color:var(--td-text-color-secondary)}
+.zt-dash-card-count{font-size:30px;line-height:1;font-weight:600;color:var(--td-text-color-primary);font-variant-numeric:tabular-nums}
+.zt-dash-card-meta{font-size:12px;color:var(--td-text-color-placeholder)}
+.zt-dash-lists{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.zt-dash-list{border:1px solid var(--td-component-stroke);border-radius:16px;background:var(--td-bg-color-container);display:flex;flex-direction:column;min-width:0;height:260px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.zt-dash-list-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.18);font-size:13px;font-weight:600;color:#fff;flex:0 0 auto}
+.zt-dash-list-head-story{background:#2f7cf6}
+.zt-dash-list-head-bug{background:#e34d59}
+.zt-dash-list-head-task{background:#ed7b2f}
+.zt-dash-list-count{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:20px;padding:0 7px;border-radius:20px;background:rgba(255,255,255,.22);color:#fff;font-size:12px;font-weight:500;font-variant-numeric:tabular-nums}
+.zt-dash-list-body{flex:1;min-height:0;overflow:auto;padding:4px 0;scrollbar-width:thin}
+.zt-dash-row{display:flex;align-items:center;gap:12px;padding:9px 14px;text-decoration:none;color:var(--td-text-color-primary)}
+.zt-dash-row:hover{background:var(--td-bg-color-container-hover)}
+.zt-dash-row-title{flex:1;min-width:0;font-size:13px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zt-dash-row-date{flex:0 0 auto;font-size:12px;color:var(--td-text-color-secondary);font-variant-numeric:tabular-nums}
+.zt-dash-empty{padding:18px 14px;font-size:12px;color:var(--td-text-color-placeholder)}
+@container (max-width: 720px){
+.zt-dash-lists{grid-template-columns:1fr}
+}
+@container (max-width: 440px){
+.zt-dash-cards{grid-template-columns:1fr}
+}
+.zt-cal{border:1px solid var(--td-component-stroke);border-radius:16px;background:var(--td-bg-color-container);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.zt-cal-head{display:flex;align-items:center;justify-content:flex-start;gap:12px;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.18);background:#2f7cf6;flex-wrap:wrap;color:#fff}
+.zt-cal-head .zt-icon-btn{color:rgba(255,255,255,.9)}
+.zt-cal-head .zt-icon-btn:hover{background:rgba(255,255,255,.16);color:#fff}
+.zt-cal-title-line{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.zt-cal-title{font-size:14px;font-weight:600;color:#fff}
+.zt-cal-sub{margin-top:3px;font-size:12px;color:rgba(255,255,255,.78)}
+.zt-cal-mode-slot{display:flex;align-items:center;margin-left:20px;flex:0 0 auto}
+.zt-cal-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
+.zt-cal-mode{display:inline-flex;gap:2px;padding:2px;border:1px solid rgba(255,255,255,.45);border-radius:var(--td-radius-round,999px);background:rgba(255,255,255,.12)}
+.zt-cal-mode-btn{height:24px;padding:0 10px;border:0;border-radius:var(--td-radius-round,999px);background:transparent;color:rgba(255,255,255,.9);cursor:pointer;font-size:12px;line-height:24px;white-space:nowrap;transition:background-color .15s,color .15s}
+.zt-cal-mode-btn:hover{background:rgba(255,255,255,.18);color:#fff}
+.zt-cal-mode-btn-active{background:#fff;color:#2f7cf6;font-weight:500}
+.zt-cal-month{min-width:104px;padding:0 4px;text-align:center;font-size:13px;font-weight:500;color:#fff;font-variant-numeric:tabular-nums;white-space:nowrap}
+.zt-cal-today-btn{height:28px;padding:0 12px;border:1px solid rgba(255,255,255,.55);border-radius:var(--td-radius-round,999px);background:transparent;color:#fff;cursor:pointer;font-size:12px}
+.zt-cal-today-btn:hover{background:rgba(255,255,255,.16);border-color:#fff;color:#fff}
+.zt-cal-error{padding:8px 14px;background:rgba(0,0,0,.18);color:#fff;font-size:12px}
+.zt-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:0}
+.zt-cal-week{padding:8px 10px;font-size:12px;font-weight:500;color:var(--td-text-color-placeholder);text-align:center;border-bottom:1px solid var(--td-component-stroke);border-right:1px solid var(--td-component-stroke)}
+.zt-cal-week:nth-child(7){border-right:0}
+.zt-cal-week-weekend{color:var(--td-text-color-placeholder);background:#fafafa}
+.zt-cal-cell{height:104px;min-height:0;padding:6px 8px;border-bottom:1px solid var(--td-component-stroke);border-right:1px solid var(--td-component-stroke);display:flex;flex-direction:column;gap:4px;min-width:0;background:var(--td-bg-color-container);transition:background-color .15s;overflow:hidden;box-sizing:border-box}
+.zt-cal-cell:nth-child(7n){border-right:0}
+.zt-cal-cell:hover{background:var(--td-brand-color-light,#f2f3ff)}
+.zt-cal-weekend{background:#fafafa}
+.zt-cal-weekend:hover{background:var(--td-brand-color-light,#f2f3ff)}
+.zt-cal-blank{background:var(--td-bg-color-page)}
+.zt-cal-blank:hover{background:var(--td-bg-color-page)}
+.zt-cal-day{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0}
+.zt-cal-day-left{display:flex;align-items:center;gap:4px;min-width:0}
+.zt-cal-lunar{font-size:11px;line-height:16px;color:var(--td-text-color-placeholder);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+.zt-cal-lunar-festival{color:#d54941}
+.zt-cal-lunar-term{color:#2ba471}
+.zt-cal-day-week{font-size:11px;color:var(--td-text-color-placeholder)}
+.zt-cal-holiday{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 3px;border-radius:4px;color:#fff;font-size:10px;line-height:16px;font-weight:500;box-sizing:border-box}
+.zt-cal-holiday-rest{background:#2f7cf6}
+.zt-cal-holiday-work{background:#e34d59}
+.zt-cal-grid-week .zt-cal-cell{height:624px;min-height:624px}
+.zt-cal-day-num{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;border-radius:50%;font-size:12px;color:var(--td-text-color-secondary);font-variant-numeric:tabular-nums}
+.zt-cal-today .zt-cal-day-num{background:var(--td-brand-color);color:#fff;font-weight:600}
+.zt-cal-selected{box-shadow:inset 0 0 0 2px var(--td-brand-color-focus, rgba(0,82,217,.35))}
+.zt-cal-tasks{display:flex;flex-direction:column;gap:8px;overflow:hidden;margin-top:2px}
+.zt-cal-tasks-month{gap:4px;margin-top:1px}
+.zt-cal-task-month{padding:2px 6px;line-height:14px;font-size:11px;max-height:20px;flex:0 0 auto}
+.zt-cal-task{display:block;padding:4px 8px;border-radius:6px;background:var(--td-brand-color-light);color:var(--td-text-color-brand);font-size:12px;line-height:16px;text-decoration:none;cursor:grab;border:1px solid transparent;transition:background-color .15s,border-color .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.zt-cal-task-link{display:block;color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zt-cal-task-week{display:flex;align-items:flex-start;gap:6px;white-space:normal;padding:4px 8px}
+.zt-cal-task-week .zt-cal-task-link{flex:1;min-width:0;white-space:normal;word-break:break-all;max-height:32px;overflow:hidden}
+.zt-cal-task-check{width:13px;height:13px;margin:2px 0 0;flex:0 0 auto;accent-color:var(--td-brand-color);cursor:pointer}
+.zt-cal-task-done,.zt-cal-task-done:hover{background:#f2f3f5;border-color:transparent;color:rgba(0,0,0,.4);cursor:default;box-shadow:none}
+.zt-cal-task-done .zt-cal-task-link{color:rgba(0,0,0,.4)}
+.zt-cal-task:hover{background:var(--td-brand-color-light, #e3f2fd);border-color:var(--td-brand-color);color:var(--td-text-color-brand)}
+.zt-cal-task:active{cursor:grabbing}
+.zt-modal-dialog{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;max-height:100vh;margin:0;padding:24px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;box-sizing:border-box;overflow:auto}
+.zt-modal-dialog::backdrop{background:rgba(0,0,0,.4)}
+.zt-modal{width:520px;max-width:100%;border-radius:8px;background:var(--td-bg-color-container);box-shadow:0 12px 40px rgba(0,0,0,.18);display:flex;flex-direction:column;max-height:calc(100vh - 48px);overflow:visible}
+.zt-modal-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:20px 24px 0}
+.zt-modal-title{font-size:16px;font-weight:600;color:var(--td-text-color-primary);line-height:24px}
+.zt-modal-close{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:transparent;color:var(--td-text-color-secondary);cursor:pointer}
+.zt-modal-close:hover{background:var(--td-bg-color-container-hover);color:var(--td-text-color-primary)}
+.zt-modal-body{padding:16px 24px 4px;display:flex;flex-direction:column;gap:16px;overflow:visible}
+.zt-modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:20px 24px 24px}
+.zt-modal .zt-field{display:flex;flex-direction:column;align-items:stretch;gap:6px;text-align:left}
+.zt-modal .zt-field-label{display:flex;align-items:center;gap:2px;font-size:13px;line-height:20px;color:var(--td-text-color-primary);white-space:nowrap}
+.zt-modal .zt-field-required{color:var(--td-error-color,#d54941);font-weight:600;line-height:18px}
+.zt-modal .zt-field-label-text{line-height:18px}
+.zt-modal .zt-input,.zt-modal .zt-textarea{width:100%;box-sizing:border-box;min-height:0;border:1px solid var(--td-border-level-2-color,#dcdcdc);border-radius:6px;background:var(--td-bg-color-container);color:var(--td-text-color-primary);font:var(--td-font-body-medium);font-size:13px;transition:border-color .15s,box-shadow .15s}
+.zt-modal .zt-input{height:32px;padding:0 10px;line-height:30px}
+.zt-modal .zt-textarea{height:auto;min-height:76px;padding:8px 10px;line-height:20px;resize:vertical;font-family:inherit}
+.zt-modal .zt-input:hover,.zt-modal .zt-textarea:hover{border-color:var(--td-brand-color)}
+.zt-modal .zt-input:focus,.zt-modal .zt-textarea:focus{outline:none;border:1px solid var(--td-brand-color);box-shadow:0 0 0 2px var(--td-brand-color-focus,rgba(0,82,217,.2))}
+.zt-modal .zt-input::placeholder,.zt-modal .zt-textarea::placeholder{color:var(--td-text-color-placeholder)}
+.zt-select-field{position:relative}
+.zt-select-trigger{width:100%;height:32px;padding:0 10px;box-sizing:border-box;display:flex;align-items:center;gap:8px;border:1px solid var(--td-border-level-2-color,#dcdcdc);border-radius:6px;background:var(--td-bg-color-container);cursor:pointer;font:var(--td-font-body-medium);font-size:13px;color:var(--td-text-color-primary);text-align:left;transition:border-color .15s,box-shadow .15s}
+.zt-select-trigger:hover{border-color:var(--td-brand-color)}
+.zt-select-field-open .zt-select-trigger{border-color:var(--td-brand-color);box-shadow:0 0 0 2px var(--td-brand-color-focus,rgba(0,82,217,.2))}
+.zt-select-trigger-disabled{opacity:.6;cursor:default;background:var(--td-bg-color-container-hover)}
+.zt-select-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zt-select-placeholder{flex:1;min-width:0;color:var(--td-text-color-placeholder);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zt-select-arrow{display:inline-flex;color:var(--td-text-color-placeholder);flex:0 0 auto;transition:transform .15s}
+.zt-select-field-open .zt-select-arrow{transform:rotate(180deg)}
+.zt-select-popup{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;max-height:240px;overflow:auto;padding:4px 0;border:1px solid var(--td-component-stroke);border-radius:8px;background:var(--td-bg-color-container);box-shadow:0 6px 24px rgba(0,0,0,.14);scrollbar-width:thin}
+.zt-select-search-wrap{padding:6px;border-bottom:1px solid var(--td-component-stroke);position:sticky;top:0;background:var(--td-bg-color-container);z-index:1}
+.zt-select-search{width:100%;height:28px;padding:0 8px;box-sizing:border-box;border:1px solid var(--td-border-level-2-color,#dcdcdc);border-radius:6px;background:var(--td-bg-color-container);color:var(--td-text-color-primary);font:var(--td-font-body-medium);font-size:12px;outline:none}
+.zt-select-search:focus{border-color:var(--td-brand-color);box-shadow:0 0 0 2px var(--td-brand-color-focus,rgba(0,82,217,.2))}
+.zt-select-search::placeholder{color:var(--td-text-color-placeholder)}
+.zt-select-group{padding:6px 12px 4px;font-size:12px;color:var(--td-text-color-placeholder)}
+.zt-select-option{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border:0;background:transparent;cursor:pointer;font-size:13px;color:var(--td-text-color-primary);text-align:left}
+.zt-select-option:hover{background:var(--td-bg-color-container-hover)}
+.zt-select-option-active{background:var(--td-brand-color-light,#f2f3ff);color:var(--td-text-color-brand)}
+.zt-select-option-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zt-select-empty{padding:10px 12px;font-size:12px;color:var(--td-text-color-placeholder)}
+.zt-option-status{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;font-size:12px;color:var(--td-text-color-secondary)}
+.zt-status-dot{width:6px;height:6px;border-radius:50%;display:inline-block}
+.zt-status-dot-doing{background:#2ba471}
+.zt-status-dot-wait{background:#b9b9b9}
+.zt-modal .zt-field-error{padding:8px 10px;border-radius:6px;background:var(--td-error-color-1,#fff0ef);color:var(--td-error-color,#d54941);font-size:12px}
+.zt-btn{height:32px;padding:0 18px;border-radius:6px;border:1px solid transparent;cursor:pointer;font-size:13px}
+.zt-btn-ghost{border-color:var(--td-border-level-2-color,#dcdcdc);background:transparent;color:var(--td-text-color-secondary)}
+.zt-btn-ghost:hover{color:var(--td-text-color-primary);border-color:var(--td-brand-color)}
+.zt-btn-primary{background:var(--td-brand-color);color:#fff}
+.zt-btn-primary:hover{background:var(--td-brand-color-hover)}
+.zt-btn-primary:disabled{opacity:.6;cursor:default}
 .zt-only-mine-switch{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;padding:2px 4px;border-radius:6px;cursor:pointer;user-select:none;-webkit-app-region:no-drag}
 .zt-only-mine-switch:hover{background:var(--td-bg-color-container-hover)}
 .zt-only-mine-label{font-size:12px;line-height:18px;color:var(--td-text-color-secondary);white-space:nowrap}
@@ -3812,6 +5909,24 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-sort{display:inline-flex;align-items:center;margin-left:4px;color:var(--zt-icon-brand)}
 .zt-table th.zt-col-id{width:10%}.zt-table th.zt-col-title{width:30%}.zt-table th.zt-col-module{width:14%}.zt-table th.zt-col-priority{width:12%}.zt-table th.zt-col-assignee{width:12%}.zt-table th.zt-col-state{width:22%}
 .zt-table.zt-table-story th.zt-col-id{width:8%}.zt-table.zt-table-story th.zt-col-title{width:26%}.zt-table.zt-table-story th.zt-col-module{width:12%}.zt-table.zt-table-story th.zt-col-priority{width:9%}.zt-table.zt-table-story th.zt-col-assignee{width:9%}.zt-table.zt-table-story th.zt-col-storystate{width:9%}.zt-table.zt-table-story th.zt-col-state{width:27%}
+.zt-table.zt-table-task th.zt-col-id{width:8%}.zt-table.zt-table-task th.zt-col-title{width:26%}.zt-table.zt-table-task th.zt-col-module{width:13%}.zt-table.zt-table-task th.zt-col-priority{width:9%}.zt-table.zt-table-task th.zt-col-state{width:16%}.zt-table.zt-table-task th.zt-col-assignee{width:14%}.zt-table.zt-table-task th.zt-col-deadline{width:14%}
+.zt-table.zt-table-testtask th.zt-col-id{width:9%}.zt-table.zt-table-testtask th.zt-col-title{width:32%}.zt-table.zt-table-testtask th.zt-col-state{width:12%}.zt-table.zt-table-testtask th.zt-col-owner{width:17%}.zt-table.zt-table-testtask th.zt-col-date{width:15%}
+.zt-table.zt-table-report th.zt-col-id{width:9%}.zt-table.zt-table-report th.zt-col-title{width:45%}.zt-table.zt-table-report th.zt-col-testtask{width:30%}.zt-table.zt-table-report th.zt-col-date{width:16%}
+@container (max-width: 560px){
+.zt-table.zt-table-task th.zt-col-module,.zt-table.zt-table-task td.zt-col-module{display:none}
+.zt-table.zt-table-task th.zt-col-priority,.zt-table.zt-table-task td.zt-col-priority{width:14%}
+.zt-table.zt-table-testtask th.zt-col-date:nth-of-type(5),.zt-table.zt-table-testtask td.zt-col-date:nth-of-type(5),.zt-table.zt-table-testtask th.zt-col-date:nth-of-type(6),.zt-table.zt-table-testtask td.zt-col-date:nth-of-type(6){display:none}
+.zt-table.zt-table-report th.zt-col-testtask,.zt-table.zt-table-report td.zt-col-testtask{display:none}
+}
+@container (max-width: 480px){
+.zt-table.zt-table-task th.zt-col-priority,.zt-table.zt-table-task td.zt-col-priority{display:none}
+.zt-table.zt-table-testtask th.zt-col-owner,.zt-table.zt-table-testtask td.zt-col-owner{display:none}
+}
+.zt-popup-date{display:flex;flex-direction:column;gap:10px;padding:12px}
+.zt-popup-date-input{height:32px;padding:0 10px;border:1px solid var(--td-border-level-2-color);border-radius:var(--td-radius-default,6px);background:var(--td-bg-color-container);color:var(--td-text-color-primary);font:var(--td-font-body-medium);box-sizing:border-box;width:100%}
+.zt-popup-date-actions{display:flex;justify-content:flex-end;gap:8px}
+.zt-popup-date-btn{height:28px;padding:0 12px;border:1px solid var(--td-border-level-2-color);border-radius:var(--td-radius-round,999px);background:transparent;color:var(--td-text-color-secondary);cursor:pointer;font-size:12px}
+.zt-popup-date-primary{border-color:var(--td-brand-color);background:var(--td-brand-color);color:#fff}
 @container (max-width: 620px){
 .zt-table.zt-table-story:not(.zt-cols-fixed) th.zt-col-module,.zt-table.zt-table-story:not(.zt-cols-fixed) td.zt-col-module{display:none}
 .zt-table.zt-table-story th.zt-col-id{width:10%}.zt-table.zt-table-story th.zt-col-title{width:30%}.zt-table.zt-table-story th.zt-col-priority{width:12%}.zt-table.zt-table-story th.zt-col-assignee{width:14%}.zt-table.zt-table-story th.zt-col-storystate{width:12%}.zt-table.zt-table-story th.zt-col-state{width:22%}
@@ -3955,6 +6070,13 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-composer{position:relative;padding:8px 16px 16px;display:flex;flex-direction:column;gap:8px;background:var(--td-bg-color-container);min-width:0;flex:0 0 auto}
 .zt-composer-card{position:relative;display:flex;flex-direction:column;width:100%;box-sizing:border-box;border-radius:var(--dsw-radius-panel,28px);background:var(--dsw-specific-input-major,var(--td-bg-color-container));--dsw-elevation-stroke-color:var(--dsw-alias-border-l2,#0000001a);box-shadow:var(--dsw-elevation-soft,0 0 0 .5px var(--dsw-alias-border-l2,#0000001a),0 4px 16px 0 #00000008,0 0 24px 0 #00000008);overflow:hidden;transition:box-shadow .15s ease}
 .zt-composer.zt-drop-active .zt-composer-card{outline:2px dashed var(--td-brand-color);outline-offset:2px}
+.zt-image-chips{display:flex;flex-wrap:wrap;gap:8px;padding:0 4px 8px}
+.zt-image-chip{position:relative;width:56px;height:56px;border-radius:8px;overflow:hidden;border:1px solid var(--td-component-stroke);background:var(--td-bg-color-container-hover)}
+.zt-image-chip img{width:100%;height:100%;object-fit:cover;display:block}
+.zt-image-chip-x{position:absolute;top:2px;right:2px;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;cursor:pointer}
+.zt-image-chip-x:hover{background:rgba(0,0,0,.75)}
+.zt-msg-image-names{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;margin-top:6px}
+.zt-msg-image-name{font-size:12px;line-height:18px;padding:2px 8px;border-radius:10px;background:var(--td-bg-color-container-hover);color:var(--td-text-color-secondary);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .zt-chips{display:flex;gap:8px;flex-wrap:wrap}
 .zt-chip{display:inline-flex;align-items:center;gap:4px;height:24px;max-width:220px;padding:0 4px 0 8px;background:var(--td-bg-color-secondarycontainer);border:1px solid var(--td-component-border);border-radius:var(--zt-radius);font:var(--td-font-body-small)}
 .zt-chip-type{color:var(--td-brand-color);font-weight:600}
@@ -4008,9 +6130,23 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-select-caret{position:absolute;right:8px;display:flex;color:var(--zt-icon);pointer-events:none}
 .zt-right{position:relative}
 .zt-panel-badge{position:absolute;top:-4px;right:-5px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--td-error-color);color:#fff;font-size:9px;line-height:14px;text-align:center;font-weight:500;z-index:2}
-.zt-bell-btn{position:relative}
+.zt-version-line{display:inline-flex;align-items:center;gap:8px;min-width:0}
+.zt-check-update{position:relative;display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:transparent;color:var(--td-text-color-brand);font-size:11px;line-height:16px;cursor:pointer;white-space:nowrap}
+.zt-check-update:hover{text-decoration:underline}
+.zt-check-update:disabled{color:var(--td-text-color-placeholder);cursor:default;text-decoration:none}
+.zt-check-update-new{font-weight:600}
+.zt-update-dot{width:6px;height:6px;border-radius:50%;background:var(--td-error-color);display:inline-block}
+.zt-update-pop{position:absolute;right:0;left:auto;bottom:calc(100% + 8px);z-index:45;width:calc(var(--zt-left-w, 300px) - 24px);max-width:calc(100vw - 24px);display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:10px;border:1px solid var(--td-component-stroke);background:var(--td-bg-color-container);box-shadow:var(--td-shadow-3,0 6px 24px rgba(0,0,0,.12));font-size:12px;line-height:18px;color:var(--td-text-color-secondary);box-sizing:border-box}
+.zt-update-pop-info{border-color:var(--td-brand-color-focus)}
+.zt-update-pop-ok{border-color:var(--td-success-color-focus)}
+.zt-update-pop-error{border-color:var(--td-error-color-focus);color:var(--td-error-color)}
+.zt-update-pop-text{flex:1;min-width:0;word-break:break-word}
+.zt-update-pop-close{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:0;border-radius:4px;background:transparent;color:inherit;cursor:pointer}
+.zt-update-pop-close:hover{background:var(--td-bg-color-container-hover)}
+.zt-bell-btn{position:relative;flex:0 0 auto}
+.zt-bell-dot{position:absolute;top:3px;right:3px;width:7px;height:7px;border-radius:50%;background:var(--td-error-color);box-shadow:0 0 0 1.5px var(--td-bg-color-container)}
 .zt-btn-badge{position:absolute;top:1px;right:1px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--td-error-color);color:#fff;font-size:9px;line-height:14px;text-align:center;font-weight:500}
-.zt-assign-menu{position:absolute;top:52px;right:8px;z-index:40;width:340px;max-width:calc(100% - 16px);max-height:min(440px,74vh);display:flex;flex-direction:column;background:var(--td-bg-color-container);border:1px solid var(--td-component-stroke);border-radius:10px;box-shadow:var(--td-shadow-3,0 6px 24px rgba(0,0,0,.12));overflow:hidden;-webkit-app-region:no-drag}
+.zt-assign-menu{position:absolute;right:0;left:auto;bottom:calc(100% + 8px);z-index:40;width:calc(var(--zt-left-w, 300px) - 24px);max-width:calc(100vw - 24px);max-height:min(440px,74vh);display:flex;flex-direction:column;background:var(--td-bg-color-container);border:1px solid var(--td-component-stroke);border-radius:10px;box-shadow:var(--td-shadow-3,0 6px 24px rgba(0,0,0,.12));overflow:hidden;-webkit-app-region:no-drag}
 .zt-assign-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px 6px;flex:0 0 auto;font-size:12px;line-height:18px;color:var(--td-text-color-placeholder)}
 .zt-assign-text-btn{border:0;background:transparent;color:var(--td-text-color-brand);font-size:12px;cursor:pointer;padding:0}
 .zt-assign-list{display:flex;flex-direction:column;gap:1px;flex:1 1 auto;min-height:0;overflow:auto;padding:0 4px 4px}

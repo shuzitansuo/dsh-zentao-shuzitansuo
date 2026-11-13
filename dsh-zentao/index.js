@@ -11,6 +11,7 @@ import { createAssignmentWatcher } from './lib/assignments.js';
 import { createUsageStore } from './lib/usage.js';
 import { createZenTaoApi } from './lib/zentao-api.js';
 import { parseDocument } from './lib/doc.js';
+import { checkForUpdate, applyUpdate, applyUpdateBuffer } from './lib/update.js';
 
 export const name = 'dsh-zentao';
 /** Tools service is optional for the custom-chat mode but required for native mode. */
@@ -64,6 +65,8 @@ export function apply(ctx, config = {}) {
   // 'native' = chat in DeepSeek's own conversation window, ZenTao driven by tools;
   // 'custom' = the plugin's own three-pane chat panel (the previous behaviour).
   const chatMode = config.chatMode === 'custom' ? 'custom' : 'native';
+  // Self-update manifest URL (see lib/update.js for the JSON shape).
+  const updateUrl = String(config.updateUrl || '').trim();
 
   // Background "assigned to me" watcher. Read-only polling of the three
   // ZenTao "my" pages; disable with `assignmentWatch: false`.
@@ -101,6 +104,16 @@ export function apply(ctx, config = {}) {
     for (const key of [...cache.keys()]) if (key.startsWith(prefix)) cache.delete(key);
   };
 
+  // Warm the dashboard cache in the background so opening the app doesn't wait
+  // for the full aggregation on every start (read-only, ~20 GET requests).
+  setTimeout(() => {
+    if (cache.has('dashboard')) return;
+    client
+      .dashboard()
+      .then((data) => cache.set('dashboard', { at: Date.now(), value: data }))
+      .catch(() => {});
+  }, 1500).unref?.();
+
   const engine = createChatEngine({
     get llm() {
       return ctx.get('llm');
@@ -126,6 +139,13 @@ export function apply(ctx, config = {}) {
       return result;
     },
     changeStatus: (body) => changeStatus(client, body, STATUS_OPTIONS),
+    createTask: async (body) => {
+      const result = await client.createTask(body);
+      invalidate('items:');
+      invalidate('dashboard');
+      invalidate('my-tasks');
+      return result;
+    },
   });
 
   // Expose the registered ZenTao capabilities to the native agent.
@@ -302,14 +322,171 @@ export function apply(ctx, config = {}) {
     }
 
     if (method === 'GET' && path === 'items') {
-      const type = url.searchParams.get('type') === 'bug' ? 'bug' : 'story';
+      const rawType = url.searchParams.get('type') || 'story';
+      const type = ['story', 'bug', 'task', 'testtask', 'report'].includes(rawType) ? rawType : 'story';
       const executionId = Number(url.searchParams.get('executionId') || 0);
       if (!executionId) return json(res, 400, { ok: false, error: 'executionId required' });
       const fresh = url.searchParams.get('fresh') === '1';
-      const load = () => (type === 'bug' ? client.bugs(executionId) : client.stories(executionId));
-      const items = fresh ? await load() : await cached(`items:${type}:${executionId}`, 15000, load);
+      const loaders = {
+        story: () => client.stories(executionId),
+        bug: () => client.bugs(executionId),
+        task: () => client.tasks(executionId),
+        testtask: () => client.testTasks(executionId),
+        report: () => client.testReports(executionId),
+      };
+      const load = loaders[type];
+      const ttl = type === 'report' ? 5 * 60 * 1000 : type === 'story' || type === 'bug' ? 15000 : 20000;
+      const items = fresh ? await load() : await cached(`items:${type}:${executionId}`, ttl, load);
       if (fresh) cache.set(`items:${type}:${executionId}`, { at: Date.now(), value: items });
       return json(res, 200, { ok: true, items, type });
+    }
+
+    if (method === 'GET' && path === 'dashboard') {
+      const fresh = url.searchParams.get('fresh') === '1';
+      try {
+        const data = fresh ? await client.dashboard() : await cached('dashboard', 120000, () => client.dashboard());
+        if (fresh) cache.set('dashboard', { at: Date.now(), value: data });
+        return json(res, 200, { ok: true, dashboard: data });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'GET' && path === 'my-tasks') {
+      try {
+        const fresh = url.searchParams.get('fresh') === '1';
+        const tasks = fresh ? await client.myTasks() : await cached('my-tasks', 60000, () => client.myTasks());
+        if (fresh) cache.set('my-tasks', { at: Date.now(), value: tasks });
+        return json(res, 200, { ok: true, tasks });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'GET' && path === 'iterations') {
+      try {
+        const iterations = await cached('iterations', 5 * 60 * 1000, () => client.iterationsForUser());
+        return json(res, 200, { ok: true, iterations });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'GET' && path === 'iteration-users') {
+      const executionId = Number(url.searchParams.get('executionId') || 0);
+      if (!executionId) return json(res, 400, { ok: false, error: 'executionId required' });
+      try {
+        const users = await cached(`team:${executionId}`, 5 * 60 * 1000, () => client.taskTeam(executionId));
+        return json(res, 200, { ok: true, users });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'task-create') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.createTask(body);
+        invalidate('dashboard');
+        invalidate('my-tasks');
+        invalidate('items:');
+        return json(res, 200, { ok: true, result });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'update/import') {
+      try {
+        const body = JSON.parse((await readBody(req, 40 * 1024 * 1024)) || '{}');
+        const data = String(body.data || '');
+        if (!data) return json(res, 200, { ok: false, error: '更新包内容为空' });
+        const result = await applyUpdateBuffer(Buffer.from(data, 'base64'));
+        return json(res, 200, { ok: true, version: result.version, files: result.files, restartRequired: true });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'GET' && path === 'update/check') {
+      try {
+        const info = await checkForUpdate({ updateUrl });
+        return json(res, 200, { ok: true, update: info });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'update/apply') {
+      try {
+        const info = await checkForUpdate({ updateUrl });
+        if (!info.hasUpdate) {
+          return json(res, 200, { ok: true, upToDate: true, version: info.current });
+        }
+        const result = await applyUpdate({ downloadUrl: info.downloadUrl, sha256: info.sha256 });
+        return json(res, 200, { ok: true, version: result.version, files: result.files, restartRequired: true });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'GET' && path === 'task-status-options') {
+      const id = Number(url.searchParams.get('id') || 0);
+      if (!id) return json(res, 400, { ok: false, error: 'id required' });
+      try {
+        const data = await client.taskStatusOptions(id);
+        return json(res, 200, Object.assign({ ok: true }, data));
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'GET' && path === 'task-assign-options') {
+      const id = Number(url.searchParams.get('id') || 0);
+      if (!id) return json(res, 400, { ok: false, error: 'id required' });
+      try {
+        const data = await client.taskAssignOptions(id);
+        return json(res, 200, Object.assign({ ok: true }, data));
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'task-status') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.changeTaskStatus(Number(body.id), String(body.statusKey || ''));
+        invalidate('items:');
+        invalidate('dashboard');
+        return json(res, 200, { ok: true, result });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'task-assignee') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.assignTask(Number(body.id), String(body.assignedTo || ''));
+        invalidate('items:');
+        invalidate('dashboard');
+        return json(res, 200, { ok: true, result });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'task-deadline') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.setTaskDeadline(Number(body.id), String(body.deadline || ''));
+        invalidate('items:');
+        invalidate('dashboard');
+        invalidate('my-tasks');
+        return json(res, 200, { ok: true, result });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
     }
 
     if (method === 'GET' && path === 'detail') {
@@ -500,7 +677,7 @@ export function apply(ctx, config = {}) {
     }
 
     if (method === 'POST' && path === 'chat') {
-      const body = JSON.parse((await readBody(req)) || '{}');
+      const body = JSON.parse((await readBody(req, 20 * 1024 * 1024)) || '{}');
       res.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-store',

@@ -183,12 +183,32 @@ export function createAssignmentWatcher(deps) {
     };
   }
 
+  async function loadTaskItems() {
+    if (typeof client.myTasks !== 'function') return [];
+    try {
+      const tasks = await client.myTasks();
+      return (Array.isArray(tasks) ? tasks : []).map((task) => ({
+        kind: 'task',
+        id: String(task.id),
+        title: task.title || '',
+        product: '',
+        openedBy: '',
+        statusText: task.statusText || '',
+        assignedDate: task.assignedDate || '',
+        url: baseUrl + (task.url || '/task-view-' + task.id + '.html'),
+        signature: [task.statusText, task.deadline || '', task.assignedTo || ''].join('|'),
+      }));
+    } catch (error) {
+      return [];
+    }
+  }
+
   async function poll() {
     if (polling) return;
     polling = true;
     try {
       await load();
-      const pages = await Promise.all(
+      const pagesPromise = Promise.all(
         LIST_PATHS.map(async ([kind, pagePath]) => {
           try {
             const res = await client.get(pagePath);
@@ -198,12 +218,25 @@ export function createAssignmentWatcher(deps) {
           }
         }),
       );
-      const items = pages.flatMap((page) => page.items);
+      const [pages, taskItems] = await Promise.all([pagesPromise, loadTaskItems()]);
+      const items = pages.flatMap((page) => page.items).concat(taskItems);
       const byKey = new Map();
       for (const item of items) byKey.set(`${item.kind}:${item.id}`, item);
 
       // First successful poll only establishes the baseline; it must not
       // replay every existing assignment as a notification.
+      // Tasks were added to the watcher later: old snapshots have no task keys.
+      // Seed historical tasks silently, but keep tasks assigned today unseen so
+      // they surface as a notification on the first run after the upgrade.
+      if (snapshot.initialized && !Object.keys(snapshot.seen).some((key) => key.startsWith('task:'))) {
+        const today = new Date().toISOString().slice(0, 10);
+        for (const item of taskItems) {
+          const assignedDay = String(item.assignedDate || '').slice(0, 10);
+          if (assignedDay && assignedDay >= today) continue;
+          snapshot.seen['task:' + item.id] = { sig: item.signature, at: Date.now() };
+        }
+      }
+
       if (!snapshot.initialized) {
         const seen = {};
         for (const item of items) seen[`${item.kind}:${item.id}`] = { sig: item.signature, at: Date.now() };
