@@ -96,7 +96,8 @@ export function parseMyWorkPage(kind, html, baseUrl) {
  * @returns watcher with start/stop/poll/snapshot/markRead.
  */
 export function createAssignmentWatcher(deps) {
-  const { client, baseUrl } = deps;
+  const { client } = deps;
+  let baseUrl = String(deps.baseUrl || '');
   const intervalMs = Math.max(15000, Number(deps.intervalMs) || 60000);
   const stateDir = deps.stateDir || path.join(os.homedir(), '.dsh', 'zentao');
   const statePath = path.join(stateDir, 'assignments.json');
@@ -307,6 +308,20 @@ export function createAssignmentWatcher(deps) {
     return getSnapshot();
   }
 
+  async function deleteEvents(ids) {
+    await load();
+    const wanted = Array.isArray(ids) ? new Set(ids.map(String)) : null;
+    if (wanted) {
+      const before = snapshot.events.length;
+      snapshot.events = snapshot.events.filter((event) => !wanted.has(event.id));
+      if (snapshot.events.length !== before) {
+        snapshot.unread = snapshot.events.filter((event) => !event.read).length;
+        await save();
+      }
+    }
+    return getSnapshot();
+  }
+
   function start() {
     if (timer) return;
     load().then(() => poll()).catch(() => {});
@@ -321,5 +336,9 @@ export function createAssignmentWatcher(deps) {
     timer = null;
   }
 
-  return { start, stop, poll, getSnapshot, markRead, statePath };
+  function setBaseUrl(next) {
+    if (next) baseUrl = String(next);
+  }
+
+  return { start, stop, poll, getSnapshot, markRead, deleteEvents, setBaseUrl, statePath };
 }

@@ -12,6 +12,8 @@ import { createUsageStore } from './lib/usage.js';
 import { createZenTaoApi } from './lib/zentao-api.js';
 import { parseDocument } from './lib/doc.js';
 import { checkForUpdate, applyUpdate, applyUpdateBuffer } from './lib/update.js';
+import { createDeepSeekLlm } from './lib/deepseek.js';
+import { loadSettings, saveSettings } from './lib/settings.js';
 
 export const name = 'dsh-zentao';
 /** Tools service is optional for the custom-chat mode but required for native mode. */
@@ -56,10 +58,21 @@ const STATUS_OPTIONS = {
 };
 
 export function apply(ctx, config = {}) {
-  const client = new ZenTaoClient({
+  // User-editable overrides live in ~/.dsh/zentao/workbench-settings.json so
+  // the settings dialog can change credentials/model without a restart.
+  const defaults = {
     baseUrl: config.baseUrl || 'http://127.0.0.1:8080',
     account: config.account || '',
     password: config.password || '',
+    deepseekApiKey: config.deepseekApiKey || process.env.DEEPSEEK_API_KEY || '',
+    deepseekBaseUrl: config.deepseekBaseUrl || 'https://api.deepseek.com',
+    deepseekModel: config.deepseekModel || 'deepseek-chat',
+  };
+  const settings = loadSettings(defaults);
+  const client = new ZenTaoClient({
+    baseUrl: settings.baseUrl,
+    account: settings.account,
+    password: settings.password,
   });
   // Default visibility of closed projects/iterations; the panel also has a
   // per-browser toggle, and the client only falls back to this default.
@@ -69,6 +82,18 @@ export function apply(ctx, config = {}) {
   const chatMode = config.chatMode === 'custom' ? 'custom' : 'native';
   // Self-update manifest URL (see lib/update.js for the JSON shape).
   const updateUrl = String(config.updateUrl || '').trim();
+  // Optional: talk to api.deepseek.com directly instead of DSH's model service.
+  // Configure deepseekApiKey in cordis.patch.yml (never commit the key).
+  const buildDirectLlm = () =>
+    settings.deepseekApiKey
+      ? createDeepSeekLlm({
+          apiKey: settings.deepseekApiKey,
+          baseUrl: settings.deepseekBaseUrl,
+          model: settings.deepseekModel,
+        })
+      : null;
+  let directLlm = buildDirectLlm();
+  const deepseekModel = () => settings.deepseekModel || 'deepseek-chat';
 
   // Background "assigned to me" watcher. Read-only polling of the three
   // ZenTao "my" pages; disable with `assignmentWatch: false`.
@@ -85,7 +110,7 @@ export function apply(ctx, config = {}) {
       ? null
       : createAssignmentWatcher({
           client,
-          baseUrl: config.baseUrl || 'http://127.0.0.1:8080',
+          baseUrl: settings.baseUrl,
           intervalMs: Number(config.assignmentIntervalMs) || 60000,
           stateDir: path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'zentao'),
         });
@@ -119,9 +144,10 @@ export function apply(ctx, config = {}) {
 
   const engine = createChatEngine({
     get llm() {
-      return ctx.get('llm');
+      return directLlm || ctx.get('llm');
     },
     get selection() {
+      if (directLlm) return { provider: 'deepseek-direct', model: deepseekModel() };
       const owner = ctx.get('agentDefaultModel');
       return owner && typeof owner.currentSelection === 'function' ? owner.currentSelection() : undefined;
     },
@@ -290,6 +316,14 @@ export function apply(ctx, config = {}) {
       return json(res, 200, Object.assign({ ok: true }, assignmentWatcher.getSnapshot()));
     }
 
+    if (method === 'POST' && path === 'assignments/delete') {
+      if (!assignmentWatcher) return json(res, 200, { ok: true, unread: 0, events: [], updatedAt: 0 });
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const ids = Array.isArray(body.ids) ? body.ids : [];
+      const snapshot = await assignmentWatcher.deleteEvents(ids);
+      return json(res, 200, Object.assign({ ok: true }, snapshot));
+    }
+
     if (method === 'POST' && path === 'assignments/read') {
       if (!assignmentWatcher) return json(res, 200, { ok: true, unread: 0, events: [], updatedAt: 0 });
       const body = JSON.parse((await readBody(req)) || '{}');
@@ -426,6 +460,80 @@ export function apply(ctx, config = {}) {
         return json(res, 200, { ok: true, version: result.version, files: result.files, restartRequired: true });
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'GET' && path === 'settings') {
+      return json(res, 200, {
+        ok: true,
+        settings: {
+          baseUrl: settings.baseUrl,
+          account: settings.account,
+          hasPassword: Boolean(settings.password),
+          deepseekBaseUrl: settings.deepseekBaseUrl,
+          deepseekModel: settings.deepseekModel,
+          hasDeepseekKey: Boolean(settings.deepseekApiKey),
+        },
+      });
+    }
+
+    if (method === 'POST' && path === 'settings') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        if (body.baseUrl) settings.baseUrl = String(body.baseUrl).replace(/\/+$/, '');
+        if (body.account) settings.account = String(body.account);
+        if (body.password) settings.password = String(body.password);
+        if (body.deepseekApiKey) settings.deepseekApiKey = String(body.deepseekApiKey);
+        if (body.clearDeepseekKey === true) settings.deepseekApiKey = '';
+        if (body.deepseekBaseUrl) settings.deepseekBaseUrl = String(body.deepseekBaseUrl).replace(/\/+$/, '');
+        if (body.deepseekModel) settings.deepseekModel = String(body.deepseekModel);
+        saveSettings(Object.assign({}, settings));
+        client.applyCredentials({
+          baseUrl: settings.baseUrl,
+          account: settings.account,
+          password: settings.password,
+        });
+        directLlm = buildDirectLlm();
+        cache.clear();
+        if (assignmentWatcher && typeof assignmentWatcher.setBaseUrl === 'function') {
+          assignmentWatcher.setBaseUrl(settings.baseUrl);
+        }
+        return json(res, 200, {
+          ok: true,
+          settings: {
+            baseUrl: settings.baseUrl,
+            account: settings.account,
+            hasPassword: Boolean(settings.password),
+            deepseekBaseUrl: settings.deepseekBaseUrl,
+            deepseekModel: settings.deepseekModel,
+            hasDeepseekKey: Boolean(settings.deepseekApiKey),
+          },
+        });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'GET' && path === 'models') {
+      const base = String(settings.deepseekBaseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
+      if (!settings.deepseekApiKey) {
+        return json(res, 200, { ok: true, models: [], current: settings.deepseekModel });
+      }
+      try {
+        const res2 = await fetch(base + '/models', {
+          headers: { authorization: 'Bearer ' + settings.deepseekApiKey },
+        });
+        const data = await res2.json().catch(() => ({}));
+        const ids = Array.isArray(data.data) ? data.data.map((item) => String(item.id || '')).filter(Boolean) : [];
+        const models = [...new Set(ids.concat(settings.deepseekModel ? [settings.deepseekModel] : []))];
+        return json(res, 200, { ok: true, models, current: settings.deepseekModel });
+      } catch (error) {
+        return json(res, 200, {
+          ok: true,
+          models: settings.deepseekModel ? [settings.deepseekModel] : [],
+          current: settings.deepseekModel,
+          warning: error?.message || String(error),
+        });
       }
     }
 
@@ -722,7 +830,7 @@ export function apply(ctx, config = {}) {
     }
 
     if (method === 'POST' && path === 'transcribe') {
-      const body = JSON.parse((await readBody(req)) || '{}');
+      const body = JSON.parse((await readBody(req, 20 * 1024 * 1024)) || '{}');
       const service = ctx.get('speechToText');
       if (!service || typeof service.transcribe !== 'function') {
         return json(res, 200, { ok: false, error: '语音识别服务未启用（需要安装 SenseVoice 语音包）' });

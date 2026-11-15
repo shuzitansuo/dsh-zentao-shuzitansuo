@@ -24,6 +24,12 @@ export function parseVersion(value) {
   return match ? [Number(match[1]) || 0, Number(match[2]) || 0, Number(match[3]) || 0] : [0, 0, 0];
 }
 
+function githubApiUrl(url) {
+  const match = String(url || '').match(/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/);
+  if (!match) return '';
+  return 'https://api.github.com/repos/' + match[1] + '/' + match[2] + '/contents/' + match[4] + '?ref=' + match[3];
+}
+
 function withCacheBust(url) {
   return url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
 }
@@ -62,11 +68,30 @@ export async function checkForUpdate({ updateUrl } = {}) {
   const url = String(updateUrl || '').trim();
   if (!url) throw new Error('未配置更新地址（请在插件配置中设置 updateUrl）');
   let manifest;
+  const readManifest = async (target) => {
+    const res = await fetchText(withCacheBust(target));
+    const data = await res.json();
+    // GitHub Contents API returns { content: base64, encoding: "base64" }.
+    if (data && typeof data.content === 'string' && data.encoding === 'base64') {
+      return JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));
+    }
+    return data;
+  };
   try {
-    const res = await fetchText(withCacheBust(url));
-    manifest = await res.json();
-  } catch (error) {
-    throw new Error('检查更新失败：' + (error && error.message ? error.message : String(error)));
+    manifest = await readManifest(url);
+  } catch (firstError) {
+    // raw.githubusercontent.com is often unreachable; fall back to the GitHub API.
+    const fallback = githubApiUrl(url);
+    if (!fallback) {
+      const reason = firstError && firstError.cause && firstError.cause.code ? ' (' + firstError.cause.code + ')' : '';
+      throw new Error('检查更新失败：' + (firstError && firstError.message ? firstError.message : String(firstError)) + reason);
+    }
+    try {
+      manifest = await readManifest(fallback);
+    } catch (error) {
+      const reason = error && error.cause && error.cause.code ? ' (' + error.cause.code + ')' : '';
+      throw new Error('检查更新失败：' + (error && error.message ? error.message : String(error)) + reason);
+    }
   }
   const version = String((manifest && manifest.version) || '').replace(/^v/i, '').trim();
   const downloadUrl = String((manifest && (manifest.url || manifest.downloadUrl)) || '').trim();
@@ -173,7 +198,27 @@ export async function applyUpdateBuffer(buffer, { sha256 } = {}) {
 export async function applyUpdate({ downloadUrl, sha256 } = {}) {
   const url = String(downloadUrl || '').trim();
   if (!url) throw new Error('缺少更新包地址');
-  const res = await fetchText(withCacheBust(url));
-  const buffer = Buffer.from(await res.arrayBuffer());
+  const readBuffer = async (target) => {
+    const res = await fetchText(withCacheBust(target));
+    if (target.includes('api.github.com')) {
+      const data = await res.json();
+      if (data && typeof data.content === 'string' && data.encoding === 'base64') {
+        return Buffer.from(data.content, 'base64');
+      }
+      throw new Error('更新包下载失败：GitHub API 返回了非文件内容');
+    }
+    return Buffer.from(await res.arrayBuffer());
+  };
+  let buffer;
+  try {
+    buffer = await readBuffer(url);
+  } catch (firstError) {
+    const fallback = githubApiUrl(url);
+    if (!fallback) {
+      const reason = firstError && firstError.cause && firstError.cause.code ? ' (' + firstError.cause.code + ')' : '';
+      throw new Error('下载更新包失败：' + (firstError && firstError.message ? firstError.message : String(firstError)) + reason);
+    }
+    buffer = await readBuffer(fallback);
+  }
   return await applyUpdateBuffer(buffer, { sha256 });
 }

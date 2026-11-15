@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.0.5';
+    const PLUGIN_VERSION = 'v0.0.6';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
@@ -92,6 +92,27 @@ window.__ModuleLoader__.load({
         applyAssignmentSnapshot(data);
       } catch (error) {
         /* ignore: the poll will resync */
+      }
+    }
+
+    async function dismissAssignments(ids) {
+      const wanted = new Set((Array.isArray(ids) ? ids : []).map(String));
+      if (!wanted.size) return;
+      // Optimistic dismiss so the × always gives immediate feedback.
+      assignmentStore.events = assignmentStore.events.filter((event) => !wanted.has(String(event.id)));
+      assignmentStore.unread = assignmentStore.events.filter((event) => !event.read).length;
+      for (const listener of assignmentStore.listeners) listener();
+      try {
+        const data = await api('/zentao/api/assignments/delete', {
+          method: 'POST',
+          headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+          body: JSON.stringify({ ids: Array.from(wanted) }),
+        });
+        applyAssignmentSnapshot(data);
+      } catch (error) {
+        // Older host without the delete endpoint: keep the local dismissal
+        // until the next successful refresh.
+        refreshAssignments();
       }
     }
 
@@ -562,14 +583,18 @@ window.__ModuleLoader__.load({
         bell: ['M5 8V13L3 16V19H21V16L19 13V8C19 4.13401 15.866 1 12 1C8.13401 1 5 4.13401 5 8Z', 'M8.5 19H15.5C15.5 20.933 13.933 22.5 12 22.5C10.067 22.5 8.5 20.933 8.5 19Z'],
         'new-chat': ['M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 14.6624 3.04042 17.0817 4.73686 18.8737L3 22H12Z', 'M12 8.5V15.5M8.5 12H15.5'],
         copy: ['M5 8.5H14.5C15.3 8.5 16 9.2 16 10V19C16 19.8 15.3 20.5 14.5 20.5H5C4.2 20.5 3.5 19.8 3.5 19V10C3.5 9.2 4.2 8.5 5 8.5Z', 'M9.5 4.5H18.5C19.3 4.5 20 5.2 20 6V15.5'],
-        attach: ['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'],
+        attach: ['m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48'],
         edit: ['M14.1048 6.00427L4.78744 15.3216L3.99805 20.0001L8.67652 19.2107L17.9939 9.89336L14.1048 6.00427ZM14.1048 6.00427L17.1615 2.94727L21.0506 6.83635L17.9939 9.89336'],
         bookmark: ['M6.5 3H17.5V21L12 16.5L6.5 21V3Z'],
         'fold-vertical': ['M7 3L12 8L17 3', 'M7 21L12 16L17 21'],
         'unfold-vertical': ['M7 9L12 4L17 9', 'M7 15L12 20L17 15'],
         folder: ['M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'],
         'folder-open': ['m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2'],
-        mic: ['M12 18V21M7 21H17M6.5 14H9M6.5 7H9M6.5 10.5H9M15 14H17.5M15 7H17.5M15 10.5H17.5M6 7V13C6 13.3425 6.03443 13.6769 6.10002 14C6.56329 16.2822 8.58104 18 11 18C11.781 18 12.219 18 13 18C15.419 18 17.4367 16.2822 17.9 14C17.9656 13.6769 18 13.3425 18 13V7C18 4.23858 15.7614 2 13 2H11C8.23858 2 6 4.23858 6 7Z'],
+        mic: ['M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z', 'M19 10v2a7 7 0 0 1-14 0v-2', 'M12 19v3'],
+        settings: [
+          'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z',
+          'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
+        ],
         search: [
           'M15.8033 15.8033C12.8744 18.7322 8.12563 18.7322 5.1967 15.8033C2.26777 12.8744 2.26777 8.12563 5.1967 5.1967C8.12563 2.26777 12.8744 2.26777 15.8033 5.1967C18.7322 8.12563 18.7322 12.8744 15.8033 15.8033Z',
           'M15.8027 15.8037L21.106 21.107',
@@ -973,6 +998,22 @@ window.__ModuleLoader__.load({
       const [docBusy, setDocBusy] = useState(false);
       const [pendingImages, setPendingImages] = useState([]);
       const [updateState, setUpdateState] = useState({ checking: false, text: '', tone: '', available: '' });
+      const [modelInfo, setModelInfo] = useState({ models: [], current: '' });
+      const [settingsOpen, setSettingsOpen] = useState(false);
+      const [settingsLoading, setSettingsLoading] = useState(false);
+      const [settingsSaving, setSettingsSaving] = useState(false);
+      const [settingsError, setSettingsError] = useState('');
+      const [settingsForm, setSettingsForm] = useState({
+        baseUrl: '',
+        account: '',
+        password: '',
+        deepseekApiKey: '',
+        deepseekBaseUrl: 'https://api.deepseek.com',
+        deepseekModel: 'deepseek-chat',
+        hasPassword: false,
+        hasDeepseekKey: false,
+      });
+      const settingsDialogRef = useRef(null);
       const docInputRef = useRef(null);
       const importUpdateInputRef = useRef(null);
       const [editingConvId, setEditingConvId] = useState('');
@@ -988,6 +1029,10 @@ window.__ModuleLoader__.load({
       const [voiceStarting, setVoiceStarting] = useState(false);
       const recorderRef = useRef(null);
       const voiceStartingRef = useRef(false);
+      const voiceBaseRef = useRef('');
+      const voiceSessionRef = useRef(0);
+      const voicePartialTimerRef = useRef(null);
+      const voicePartialBusyRef = useRef(false);
       const [draggingCol, setDraggingCol] = useState('');
       const [dropHint, setDropHint] = useState({ key: '', side: '' });
       const [loading, setLoading] = useState(false);
@@ -1229,6 +1274,9 @@ window.__ModuleLoader__.load({
         return '已移出我的列表';
       };
 
+      const assignmentKindLabel = (event) =>
+        event && event.kind === 'task' ? '任务' : event && event.kind === 'story' ? '需求' : 'BUG';
+
       // Assignment events carry the ZenTao detail URL. Keep a deterministic
       // fallback for older saved notifications that predate the URL field.
       const assignmentUrl = (event) => {
@@ -1237,6 +1285,7 @@ window.__ModuleLoader__.load({
         if (saved) return baseUrl + (saved.startsWith('/') ? saved : '/' + saved);
         const id = Number(event && event.itemId) || 0;
         if (!id) return '';
+        if (event.kind === 'task') return baseUrl + `/task-view-${id}.html`;
         return baseUrl + (event.kind === 'story' ? `/story-view-${id}.html` : `/bug-view-${id}.html`);
       };
 
@@ -1284,7 +1333,7 @@ window.__ModuleLoader__.load({
                         h(
                           'span',
                           { className: 'zt-assign-item-meta' },
-                          (event.kind === 'story' ? '需求' : 'BUG') +
+                          assignmentKindLabel(event) +
                             ' #' +
                             event.itemId +
                             ' · ' +
@@ -1300,9 +1349,9 @@ window.__ModuleLoader__.load({
                           {
                             className: 'zt-icon-btn',
                             type: 'button',
-                            title: '标记已读',
-                            'aria-label': '标记已读',
-                            onClick: () => markAssignmentsRead([event.id]),
+                            title: '删除提醒',
+                            'aria-label': '删除提醒',
+                            onClick: () => dismissAssignments([event.id]),
                           },
                           h(GlyphIcon, { name: 'close', size: 16 }),
                         ),
@@ -1503,6 +1552,20 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (chatMode !== 'custom') return undefined;
         let alive = true;
+        api('/zentao/api/models')
+          .then((res) => {
+            if (!alive || !res || !res.ok) return;
+            setModelInfo({ models: Array.isArray(res.models) ? res.models : [], current: res.current || '' });
+          })
+          .catch(() => {});
+        return () => {
+          alive = false;
+        };
+      }, [chatMode]);
+
+      useEffect(() => {
+        if (chatMode !== 'custom') return undefined;
+        let alive = true;
         api('/zentao/api/update/check')
           .then((res) => {
             if (!alive || !res || !res.ok || !res.update) return;
@@ -1559,6 +1622,112 @@ window.__ModuleLoader__.load({
         reader.onerror = () => setUpdateState({ checking: false, text: '读取更新包失败', tone: 'error', available: '' });
         reader.readAsDataURL(file);
       };
+
+      const refreshModels = async () => {
+        try {
+          const res = await api('/zentao/api/models');
+          if (res && res.ok) {
+            setModelInfo({ models: Array.isArray(res.models) ? res.models : [], current: res.current || '' });
+          }
+        } catch (error) {
+          /* selector is optional */
+        }
+      };
+
+      const setChatModel = async (value) => {
+        const previous = modelInfo.current;
+        if (!value || value === previous) return;
+        setModelInfo((prev) => Object.assign({}, prev, { current: value }));
+        try {
+          const res = await api('/zentao/api/settings', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({ deepseekModel: value }),
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || '切换模型失败');
+        } catch (error) {
+          setModelInfo((prev) => Object.assign({}, prev, { current: previous }));
+          setActionError(error.message);
+        }
+      };
+
+      const openSettings = async () => {
+        setSettingsOpen(true);
+        setSettingsError('');
+        setSettingsLoading(true);
+        try {
+          const [res, models] = await Promise.all([api('/zentao/api/settings'), api('/zentao/api/models').catch(() => null)]);
+          if (!res || !res.ok) throw new Error((res && res.error) || '读取设置失败');
+          const data = res.settings || {};
+          setSettingsForm({
+            baseUrl: data.baseUrl || '',
+            account: data.account || '',
+            password: '',
+            deepseekApiKey: '',
+            deepseekBaseUrl: data.deepseekBaseUrl || 'https://api.deepseek.com',
+            deepseekModel: data.deepseekModel || 'deepseek-chat',
+            hasPassword: Boolean(data.hasPassword),
+            hasDeepseekKey: Boolean(data.hasDeepseekKey),
+          });
+          if (models && models.ok) {
+            setModelInfo({ models: Array.isArray(models.models) ? models.models : [], current: models.current || data.deepseekModel || '' });
+          }
+        } catch (error) {
+          setSettingsError(error.message);
+        } finally {
+          setSettingsLoading(false);
+        }
+      };
+
+      const saveSettingsForm = async () => {
+        if (settingsSaving) return;
+        setSettingsError('');
+        if (!String(settingsForm.baseUrl || '').trim()) {
+          setSettingsError('请填写禅道地址');
+          return;
+        }
+        setSettingsSaving(true);
+        try {
+          const payload = {
+            baseUrl: String(settingsForm.baseUrl || '').trim(),
+            account: String(settingsForm.account || '').trim(),
+            deepseekBaseUrl: String(settingsForm.deepseekBaseUrl || '').trim(),
+            deepseekModel: String(settingsForm.deepseekModel || '').trim(),
+          };
+          if (settingsForm.password) payload.password = settingsForm.password;
+          if (settingsForm.deepseekApiKey) payload.deepseekApiKey = settingsForm.deepseekApiKey;
+          const res = await api('/zentao/api/settings', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify(payload),
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || '保存设置失败');
+          setSettingsOpen(false);
+          await refreshModels();
+          loadTree();
+          if (selection.projectId) loadExecs(selection.projectId);
+          if (selection.executionId) loadItems(selection.executionId);
+          loadDashboard(true);
+          loadMyTasks(true);
+        } catch (error) {
+          setSettingsError(error.message);
+        } finally {
+          setSettingsSaving(false);
+        }
+      };
+
+      useEffect(() => {
+        const dialog = settingsDialogRef.current;
+        if (!dialog) return;
+        if (settingsOpen && !dialog.open) {
+          try {
+            dialog.showModal();
+          } catch (error) {
+            /* already open */
+          }
+        }
+        if (!settingsOpen && dialog.open) dialog.close();
+      }, [settingsOpen]);
 
       const checkForUpdates = async () => {
         if (updateState.checking) return;
@@ -2957,6 +3126,20 @@ window.__ModuleLoader__.load({
         }
       };
 
+      const transcribeRecorder = async (rec, session) => {
+        const merged = mergeFloat32(rec.chunks);
+        if (!merged.length) return '';
+        const wav = encodeWavPcm16(resampleLinear(merged, rec.audioCtx.sampleRate, 16000), 16000);
+        const data = await api('/zentao/api/transcribe', {
+          method: 'POST',
+          headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+          body: JSON.stringify({ audioBase64: bytesToBase64(wav) }),
+        });
+        if (voiceSessionRef.current !== session) return '';
+        if (!data.ok) throw new Error(data.error || '识别失败');
+        return String(data.text || '').trim();
+      };
+
       const startRecording = async () => {
         if (recording || transcribing || voiceStartingRef.current) return;
         voiceStartingRef.current = true;
@@ -2972,7 +3155,28 @@ window.__ModuleLoader__.load({
           source.connect(processor);
           processor.connect(audioCtx.destination);
           recorderRef.current = { stream, audioCtx, source, processor, chunks };
+          voiceBaseRef.current = input;
+          voiceSessionRef.current += 1;
+          const session = voiceSessionRef.current;
           setRecording(true);
+          // 边说边识别：每 2.5 秒把已有录音送去识别，实时替换输入框里的转写，
+          // 停下时再完整识别一次以拿到最终文本。
+          voicePartialTimerRef.current = setInterval(async () => {
+            const current = recorderRef.current;
+            if (!current || voicePartialBusyRef.current || voiceSessionRef.current !== session) return;
+            voicePartialBusyRef.current = true;
+            try {
+              const text = await transcribeRecorder(current, session);
+              if (text && voiceSessionRef.current === session) {
+                const base = voiceBaseRef.current.replace(/\s+$/, '');
+                setInput((base ? base + ' ' : '') + text);
+              }
+            } catch (error) {
+              /* keep recording; the final pass reports errors */
+            } finally {
+              voicePartialBusyRef.current = false;
+            }
+          }, 2500);
         } catch (error) {
           setActionError('无法访问麦克风：' + error.message);
         } finally {
@@ -2984,29 +3188,30 @@ window.__ModuleLoader__.load({
       const stopRecording = async () => {
         const rec = recorderRef.current;
         if (!rec) return;
+        if (voicePartialTimerRef.current) {
+          clearInterval(voicePartialTimerRef.current);
+          voicePartialTimerRef.current = null;
+        }
         recorderRef.current = null;
         setRecording(false);
         setTranscribing(true);
+        voiceSessionRef.current += 1;
+        const session = voiceSessionRef.current;
         try {
           if (rec.processor) rec.processor.disconnect();
           if (rec.source) rec.source.disconnect();
           rec.stream.getTracks().forEach((track) => track.stop());
-          const rate = rec.audioCtx.sampleRate;
           await rec.audioCtx.close();
-          const merged = mergeFloat32(rec.chunks);
-          if (!merged.length) throw new Error('没有录到声音');
-          const wav = encodeWavPcm16(resampleLinear(merged, rate, 16000), 16000);
-          const data = await api('/zentao/api/transcribe', {
-            method: 'POST',
-            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
-            body: JSON.stringify({ audioBase64: bytesToBase64(wav) }),
-          });
-          if (!data.ok) throw new Error(data.error || '识别失败');
-          const text = String(data.text || '').trim();
-          if (text) setInput((prev) => (prev ? prev.replace(/\s+$/, '') + ' ' : '') + text);
-          else setActionError('没有识别出内容，请重试');
+          const text = await transcribeRecorder(rec, session);
+          if (text) {
+            const base = String(voiceBaseRef.current || '').replace(/\s+$/, '');
+            setInput((base ? base + ' ' : '') + text);
+          } else {
+            setActionError('没有识别出内容，请重试');
+          }
         } catch (error) {
-          setActionError('语音识别失败：' + error.message);
+          if (error && error.name === 'AbortError') setActionError('语音识别超时，请重试');
+          else setActionError('语音识别失败：' + error.message);
         } finally {
           setTranscribing(false);
         }
@@ -3665,6 +3870,21 @@ window.__ModuleLoader__.load({
         );
       };
 
+      const modelLabel = (id) =>
+        String(id || '')
+          .split(/[-_]/)
+          .filter(Boolean)
+          .map((part) => (part.toLowerCase() === 'deepseek' ? 'DeepSeek' : part.charAt(0).toUpperCase() + part.slice(1)))
+          .join('-');
+
+      const fieldLabel = (text, required) =>
+        h(
+          'span',
+          { className: 'zt-field-label' },
+          required ? h('span', { className: 'zt-field-required', 'aria-hidden': true }, '*') : null,
+          h('span', { className: 'zt-field-label-text' }, text),
+        );
+
       const renderTaskModal = () => {
         if (!taskModal) return null;
         const iterations = taskModal.iterations || [];
@@ -3685,13 +3905,6 @@ window.__ModuleLoader__.load({
         const closeDropdowns = () =>
           setTaskModal((prev) =>
             prev ? Object.assign({}, prev, { iterationOpen: false, assigneeOpen: false, storyOpen: false }) : prev,
-          );
-        const fieldLabel = (text, required) =>
-          h(
-            'span',
-            { className: 'zt-field-label' },
-            required ? h('span', { className: 'zt-field-required', 'aria-hidden': true }, '*') : null,
-            h('span', { className: 'zt-field-label-text' }, text),
           );
         const statusPill = (status) =>
           h(
@@ -4111,7 +4324,7 @@ window.__ModuleLoader__.load({
                     { key: card.key, className: 'zt-dash-card zt-dash-card-' + card.key },
                     h('div', { className: 'zt-dash-card-label' }, card.label),
                     h('div', { className: 'zt-dash-card-count' }, String((data.totals && data.totals[card.key]) || 0)),
-                    h('div', { className: 'zt-dash-card-meta' }, '本周未完成'),
+                    h('div', { className: 'zt-dash-card-meta' }, '本周待完成'),
                   ),
                 ),
               )
@@ -4280,6 +4493,137 @@ window.__ModuleLoader__.load({
         },
         h('style', { key: 'zt-style' }, CSS),
         taskModal ? renderTaskModal() : null,
+        settingsOpen
+          ? h(
+              'dialog',
+              {
+                className: 'zt-modal-dialog',
+                ref: settingsDialogRef,
+                'aria-label': '设置',
+                onCancel: (event) => {
+                  event.preventDefault();
+                  setSettingsOpen(false);
+                },
+              },
+              h(
+                'div',
+                { className: 'zt-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': '设置' },
+                h(
+                  'div',
+                  { className: 'zt-modal-head' },
+                  h('span', { className: 'zt-modal-title' }, '设置'),
+                  h(
+                    'button',
+                    { className: 'zt-modal-close', type: 'button', title: '关闭', 'aria-label': '关闭', onClick: () => setSettingsOpen(false) },
+                    h(GlyphIcon, { name: 'close', size: 16 }),
+                  ),
+                ),
+                h(
+                  'div',
+                  { className: 'zt-modal-body' },
+                  settingsLoading
+                    ? h('div', { className: 'zt-modal-hint' }, '正在读取设置…')
+                    : [
+                        h(
+                          'div',
+                          { key: 'zt-title', className: 'zt-modal-section' },
+                          '禅道连接',
+                        ),
+                        h(
+                          'label',
+                          { key: 'baseUrl', className: 'zt-field' },
+                          fieldLabel('禅道地址', true),
+                          h('input', {
+                            className: 'zt-input',
+                            value: settingsForm.baseUrl,
+                            placeholder: 'http://127.0.0.1:8080',
+                            onChange: (event) =>
+                              setSettingsForm((prev) => Object.assign({}, prev, { baseUrl: event.target.value })),
+                          }),
+                        ),
+                        h(
+                          'label',
+                          { key: 'account', className: 'zt-field' },
+                          fieldLabel('账号', true),
+                          h('input', {
+                            className: 'zt-input',
+                            value: settingsForm.account,
+                            onChange: (event) =>
+                              setSettingsForm((prev) => Object.assign({}, prev, { account: event.target.value })),
+                          }),
+                        ),
+                        h(
+                          'label',
+                          { key: 'password', className: 'zt-field' },
+                          fieldLabel('密码', false),
+                          h('input', {
+                            className: 'zt-input',
+                            type: 'password',
+                            value: settingsForm.password,
+                            placeholder: settingsForm.hasPassword ? '已保存，留空不修改' : '请输入禅道密码',
+                            onChange: (event) =>
+                              setSettingsForm((prev) => Object.assign({}, prev, { password: event.target.value })),
+                          }),
+                        ),
+                        h('div', { key: 'ds-title', className: 'zt-modal-section' }, 'DeepSeek API'),
+                        h(
+                          'label',
+                          { key: 'ds-key', className: 'zt-field' },
+                          fieldLabel('API Key', false),
+                          h('input', {
+                            className: 'zt-input',
+                            type: 'password',
+                            value: settingsForm.deepseekApiKey,
+                            placeholder: settingsForm.hasDeepseekKey ? '已保存，留空不修改' : '留空则使用 DSH 当前模型',
+                            onChange: (event) =>
+                              setSettingsForm((prev) => Object.assign({}, prev, { deepseekApiKey: event.target.value })),
+                          }),
+                        ),
+                        h(
+                          'label',
+                          { key: 'ds-base', className: 'zt-field' },
+                          fieldLabel('API 地址', false),
+                          h('input', {
+                            className: 'zt-input',
+                            value: settingsForm.deepseekBaseUrl,
+                            placeholder: 'https://api.deepseek.com',
+                            onChange: (event) =>
+                              setSettingsForm((prev) => Object.assign({}, prev, { deepseekBaseUrl: event.target.value })),
+                          }),
+                        ),
+                        h(
+                          'label',
+                          { key: 'ds-model', className: 'zt-field' },
+                          fieldLabel('默认模型', false),
+                          h(
+                            'select',
+                            {
+                              className: 'zt-input',
+                              value: settingsForm.deepseekModel,
+                              onChange: (event) =>
+                                setSettingsForm((prev) => Object.assign({}, prev, { deepseekModel: event.target.value })),
+                            },
+                            [...new Set([settingsForm.deepseekModel, ...modelInfo.models].filter(Boolean))].map((model) =>
+                              h('option', { key: model, value: model }, model),
+                            ),
+                          ),
+                        ),
+                        settingsError ? h('div', { key: 'err', className: 'zt-field-error' }, settingsError) : null,
+                      ],
+                ),
+                h(
+                  'div',
+                  { className: 'zt-modal-foot' },
+                  h('button', { className: 'zt-btn zt-btn-ghost', type: 'button', onClick: () => setSettingsOpen(false) }, '取消'),
+                  h(
+                    'button',
+                    { className: 'zt-btn zt-btn-primary', type: 'button', disabled: settingsSaving || settingsLoading, onClick: saveSettingsForm },
+                    settingsSaving ? '保存中…' : '保存',
+                  ),
+                ),
+              ),
+            )
+          : null,
         layout.leftOpen
           ? h(
               'aside',
@@ -4590,7 +4934,7 @@ window.__ModuleLoader__.load({
                 { className: 'zt-left-foot' },
                 h(
                   'div',
-                  { className: 'zt-version-line' },
+                  { className: 'zt-foot-left' },
                   h('span', { className: 'zt-plugin-version', title: '禅道 AI 工作台版本' }, PLUGIN_VERSION),
                   h(
                     'button',
@@ -4605,16 +4949,31 @@ window.__ModuleLoader__.load({
                   ),
                 ),
                 h(
-                  'button',
-                  {
-                    className: 'zt-icon-btn zt-bell-btn',
-                    type: 'button',
-                    title: assignEvents.unread ? '指派提醒（' + assignEvents.unread + ' 条未读）' : '指派提醒',
-                    'aria-label': '指派提醒',
-                    onClick: () => setAssignMenuOpen((v) => !v),
-                  },
-                  h(GlyphIcon, { name: 'bell', size: 16 }),
-                  assignEvents.unread ? h('span', { className: 'zt-bell-dot', 'aria-hidden': true }) : null,
+                  'div',
+                  { className: 'zt-foot-right' },
+                  h(
+                    'button',
+                    {
+                      className: 'zt-icon-btn zt-settings-btn',
+                      type: 'button',
+                      title: '设置禅道账号与模型',
+                      'aria-label': '设置',
+                      onClick: openSettings,
+                    },
+                    h(GlyphIcon, { name: 'settings', size: 16 }),
+                  ),
+                  h(
+                    'button',
+                    {
+                      className: 'zt-icon-btn zt-bell-btn',
+                      type: 'button',
+                      title: assignEvents.unread ? '指派提醒（' + assignEvents.unread + ' 条未读）' : '指派提醒',
+                      'aria-label': '指派提醒',
+                      onClick: () => setAssignMenuOpen((v) => !v),
+                    },
+                    h(GlyphIcon, { name: 'bell', size: 16 }),
+                    assignEvents.unread ? h('span', { className: 'zt-bell-dot', 'aria-hidden': true }) : null,
+                  ),
                 ),
                 updateState.text
                   ? h(
@@ -5098,6 +5457,7 @@ window.__ModuleLoader__.load({
                     style: { height: inputH + 'px', resize: 'none' },
                     placeholder: 'Enter 发送，Shift + Enter 换行。/ 选择功能，@ 选择迭代',
                     value: input,
+                    readOnly: recording,
                     onChange: (e) => {
                       setInput(e.target.value);
                       analyzeComposerInput(e.target.value);
@@ -5159,15 +5519,53 @@ window.__ModuleLoader__.load({
                       }),
                     ),
                     h(
-                      'button',
-                      {
-                        className: 'zt-send' + (busy ? ' zt-send-busy' : ''),
-                        disabled: busy || (!input.trim() && !contexts.length),
-                        title: busy ? '生成中…' : '发送',
-                        'aria-label': busy ? '生成中' : '发送',
-                        onClick: () => send(input, null),
-                      },
-                      busy ? h('span', { className: 'zt-spinner' }) : h(GlyphIcon, { name: 'arrow-up', size: 16 }),
+                      'div',
+                      { className: 'zt-composer-actions' },
+                      modelInfo.models.length
+                        ? h(
+                            'span',
+                            { className: 'zt-model-wrap' },
+                            h(
+                              'select',
+                              {
+                                className: 'zt-model-chip',
+                                value: modelInfo.current || modelInfo.models[0],
+                                title: '选择对话模型',
+                                'aria-label': '选择对话模型',
+                                onChange: (event) => setChatModel(event.target.value),
+                              },
+                              modelInfo.models.map((model) =>
+                                h('option', { key: model, value: model }, modelLabel(model)),
+                              ),
+                            ),
+                            h(GlyphIcon, { name: 'chevron-down', size: 12 }),
+                          )
+                        : null,
+                      h(
+                        'button',
+                        {
+                          className: 'zt-tool-btn zt-mic-btn' + (recording ? ' zt-tool-recording' : ''),
+                          type: 'button',
+                          disabled: busy || transcribing || voiceStarting,
+                          title: recording ? '停止录音' : transcribing ? '正在识别…' : '语音输入',
+                          'aria-label': recording ? '停止录音' : '语音输入',
+                          onClick: recording ? stopRecording : startRecording,
+                        },
+                        transcribing || voiceStarting
+                          ? h('span', { className: 'zt-spinner' })
+                          : h(GlyphIcon, { name: 'mic', size: 17 }),
+                      ),
+                      h(
+                        'button',
+                        {
+                          className: 'zt-send' + (busy ? ' zt-send-busy' : ''),
+                          disabled: busy || (!input.trim() && !contexts.length),
+                          title: busy ? '生成中…' : '发送',
+                          'aria-label': busy ? '生成中' : '发送',
+                          onClick: () => send(input, null),
+                        },
+                        busy ? h('span', { className: 'zt-spinner' }) : h(GlyphIcon, { name: 'arrow-up', size: 16 }),
+                      ),
                     ),
                   ),
                 ),
@@ -5214,7 +5612,7 @@ window.__ModuleLoader__.load({
                   h(
                     'div',
                     { key: event.id, className: 'zt-assign-toast-row' },
-                    h('span', { className: 'zt-assign-kind' }, event.kind === 'story' ? '需求' : 'BUG'),
+                    h('span', { className: 'zt-assign-kind' }, assignmentKindLabel(event)),
                     h(
                       'a',
                       {
@@ -5779,8 +6177,9 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-tree{overflow:auto;flex:1;min-width:0;padding:8px;scrollbar-width:thin}
 .zt-tree-busy{font-size:12px;line-height:20px;color:var(--td-text-color-secondary);padding:4px 8px}
 .zt-tree{padding:6px 8px 10px}
-.zt-left-foot{position:relative;flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 8px 6px 16px;border-top:1px solid var(--td-component-stroke)}
-.zt-plugin-version{flex:1 1 auto;min-width:0;padding:4px 0;font-size:11px;line-height:16px;color:var(--td-text-color-placeholder);user-select:none}
+.zt-left-foot{position:relative;flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 10px 6px;border-top:1px solid var(--td-component-stroke)}
+.zt-foot-left,.zt-foot-right{display:flex;align-items:center;gap:8px;flex:0 0 auto;min-width:0}
+.zt-plugin-version{flex:0 0 auto;min-width:0;padding:4px 0;font-size:11px;line-height:16px;color:var(--td-text-color-placeholder);user-select:none}
 .zt-pinned{padding:0 0 6px;margin:0 0 6px;border-bottom:1px solid var(--td-component-stroke)}
 .zt-pinned-head{display:flex;align-items:center;height:28px;padding:0 16px;color:var(--td-text-color-placeholder);font-size:12px;line-height:20px}
 .zt-pinned-row{padding-left:16px}
@@ -6239,8 +6638,11 @@ body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(-
 .zt-tool-recording{color:var(--td-error-color)}
 .zt-tool-recording svg{animation:zt-pulse 1.1s ease-in-out infinite}
 @keyframes zt-pulse{0%,100%{opacity:1}50%{opacity:.35}}
-.zt-model-chip{display:inline-flex;align-items:center;gap:4px;height:26px;max-width:150px;min-width:0;padding:0 10px;border:0;border-radius:13px;background:var(--td-bg-color-container-hover);color:var(--td-text-color-secondary);font-size:12px;line-height:18px;cursor:pointer;transition:background-color .12s,color .12s;flex:0 1 auto}
-.zt-model-chip:hover{color:var(--td-text-color-primary)}
+.zt-composer-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto;min-width:0}
+.zt-model-wrap{position:relative;display:inline-flex;align-items:center;min-width:0;color:var(--td-text-color-secondary)}
+.zt-model-wrap>svg{position:absolute;right:7px;pointer-events:none;opacity:.7}
+.zt-model-chip{display:inline-flex;align-items:center;height:28px;max-width:150px;min-width:0;padding:0 24px 0 9px;border:0;border-radius:14px;background:transparent;color:var(--td-text-color-secondary);font-size:12px;line-height:18px;cursor:pointer;transition:background-color .12s,color .12s;appearance:none;-webkit-appearance:none;text-overflow:ellipsis}
+.zt-model-chip:hover{background:var(--td-bg-color-container-hover);color:var(--td-text-color-primary)}
 .zt-model-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .zt-hint{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;font-size:12px;line-height:18px;color:var(--dsw-alias-label-caption,var(--td-text-color-placeholder))}
 .zt-menu-backdrop{position:fixed;inset:0;z-index:39}
@@ -6267,8 +6669,14 @@ body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(-
 .zt-select-wrap{position:relative;display:flex;align-items:center;flex:1 1 auto;min-width:0}
 .zt-select-caret{position:absolute;right:8px;display:flex;color:var(--zt-icon);pointer-events:none}
 .zt-right{position:relative}
-.zt-panel-badge{position:absolute;top:-4px;right:-5px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--td-error-color);color:#fff;font-size:9px;line-height:14px;text-align:center;font-weight:500;z-index:2}
+.zt-panel-badge-dot{position:absolute;top:0;right:0;width:6px;height:6px;border-radius:50%;background:#e34d59;z-index:2}
 .zt-version-line{display:inline-flex;align-items:center;gap:8px;min-width:0}
+.zt-settings-btn{flex:0 0 auto}
+.zt-model-select{height:26px;max-width:150px;min-width:90px;padding:0 22px 0 8px;border:1px solid var(--td-component-stroke);border-radius:6px;background:var(--td-bg-color-container);color:var(--td-text-color-primary);font-size:12px;line-height:24px;cursor:pointer;appearance:auto}
+.zt-model-select:hover{border-color:var(--td-brand-color)}
+.zt-model-select:focus{outline:none;border-color:var(--td-brand-color)}
+.zt-modal-section{font-size:12px;font-weight:600;color:var(--td-text-color-secondary);padding-top:2px}
+.zt-modal-hint{padding:8px 0;color:var(--td-text-color-secondary);font-size:13px}
 .zt-check-update{position:relative;display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:transparent;color:var(--td-text-color-brand);font-size:11px;line-height:16px;cursor:pointer;white-space:nowrap}
 .zt-check-update:hover{text-decoration:underline}
 .zt-check-update:disabled{color:var(--td-text-color-placeholder);cursor:default;text-decoration:none}
@@ -6358,9 +6766,7 @@ body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(-
           },
         },
         h(Icon, { size }),
-        unread
-          ? h('span', { className: 'zt-panel-badge' }, unread > 99 ? '99+' : String(unread))
-          : null,
+        unread ? h('span', { className: 'zt-panel-badge-dot', 'aria-hidden': true }) : null,
       );
     }
 

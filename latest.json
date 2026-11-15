@@ -1,5 +1,5 @@
 {
-  "version": "0.0.5",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.0.5.zip",
-  "notes": "圆角线性图标、日历显示已完成/紧凑日期、仪表盘缓存加速、需求模块可编辑、左栏默认 350px"
+  "version": "0.0.6",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.0.6.zip",
+  "notes": "设置面板、模型选择、DeepSeek 直连、语音实时转写、通知删除、图标与底栏优化"
 }

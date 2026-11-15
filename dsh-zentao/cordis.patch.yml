@@ -9,4 +9,7 @@
         chatMode: custom
         assignmentWatch: true
         assignmentIntervalMs: 60000
-        updateUrl: 'https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/latest.json'
+        updateUrl: 'https://api.github.com/repos/shuzitansuo/dsh-zentao-shuzitansuo/contents/latest.json?ref=main'
+        deepseekApiKey: ''
+        deepseekBaseUrl: 'https://api.deepseek.com'
+        deepseekModel: 'deepseek-chat'

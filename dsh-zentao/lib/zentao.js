@@ -266,6 +266,21 @@ export class ZenTaoClient {
     return this.baseUrl;
   }
 
+  /** Apply new credentials from the settings dialog without a restart. */
+  applyCredentials({ baseUrl, account, password } = {}) {
+    if (baseUrl) this.baseUrl = String(baseUrl).replace(/\/+$/, '');
+    if (account) this.account = String(account);
+    if (password) this.password = String(password);
+    this.cookies.clear();
+    this.apiToken = '';
+    this.apiTokenAt = 0;
+    this.loggedInAt = 0;
+    this.loggingIn = null;
+    this.taskCache.clear();
+    this.moduleCache.clear();
+    this.userAccountCache.clear();
+  }
+
   #cookieHeader() {
     return [...this.cookies.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
   }

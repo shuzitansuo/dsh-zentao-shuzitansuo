@@ -70,6 +70,9 @@
 | `assignmentWatch` | `true` | 是否轮询「我的 Bug/需求」做指派提醒（只读） |
 | `assignmentIntervalMs` | `60000` | 指派提醒轮询间隔（毫秒） |
 | `updateUrl` | 空 | 更新清单 JSON 地址，例如 `https://example.com/dsh-zentao/latest.json`；留空则「检查更新」提示未配置 |
+| `deepseekApiKey` | 空 | 填写后右栏会话直连 `api.deepseek.com`（也可用环境变量 `DEEPSEEK_API_KEY`）；留空则走 DSH 当前模型 |
+| `deepseekBaseUrl` | `https://api.deepseek.com` | DeepSeek API 地址 |
+| `deepseekModel` | `deepseek-chat` | 直连时使用的模型，可改 `deepseek-reasoner` |
 
 ## 更新机制
 
@@ -81,6 +84,20 @@
 - 在 `cordis.patch.yml` 配置 `updateUrl: '.../latest.json'`
 - 左下角版本号旁会出现「检查更新」按钮：打开面板时会自动检查并提示新版本；点击后自动下载、校验并覆盖插件文件
 - 更新不会覆盖你的 `cordis.patch.yml`；装完需重启 DeepSeek Harness 生效
+
+## 直连 DeepSeek API
+
+右栏会话默认使用 DSH 里选中的模型。想直接调用 DeepSeek 官方 API：
+
+```yaml
+deepseekApiKey: 'sk-...'
+deepseekBaseUrl: 'https://api.deepseek.com'
+deepseekModel: 'deepseek-chat'   # 或 deepseek-reasoner
+```
+
+- 禅道录入/改状态等确定性流程不变，只更换底层对话模型
+- Key 只保存在本机 `cordis.patch.yml`，不要提交到公开仓库
+- 图片解析需要模型支持视觉输入；DeepSeek 文本模型不支持时会提示失败
 
 ## 升级
 
