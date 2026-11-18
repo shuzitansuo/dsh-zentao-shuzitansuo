@@ -1048,6 +1048,7 @@ export class ZenTaoClient {
         name: item.name || '',
         projectId: item.project || 0,
         projectName: names.get(item.project) || '',
+        productId: item.product || 0,
         status: item.status || '',
         statusText: item.status === 'doing' ? '进行中' : item.status === 'suspended' ? '已挂起' : item.status === 'wait' ? '未开始' : item.status || '',
         begin: item.begin || '',

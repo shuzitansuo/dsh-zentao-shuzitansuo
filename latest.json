@@ -1,5 +1,5 @@
 {
-  "version": "0.0.6",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.0.6.zip",
-  "notes": "设置面板、模型选择、DeepSeek 直连、语音实时转写、通知删除、图标与底栏优化"
+  "version": "0.0.7",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.0.7.zip",
+  "notes": "列表空白处双击/右键新建需求、BUG、任务；左侧项目/迭代右键切换状态"
 }

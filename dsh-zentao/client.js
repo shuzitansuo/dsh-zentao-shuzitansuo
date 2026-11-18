@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.0.6';
+    const PLUGIN_VERSION = 'v0.0.7';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
@@ -999,6 +999,10 @@ window.__ModuleLoader__.load({
       const [pendingImages, setPendingImages] = useState([]);
       const [updateState, setUpdateState] = useState({ checking: false, text: '', tone: '', available: '' });
       const [modelInfo, setModelInfo] = useState({ models: [], current: '' });
+      const [listMenu, setListMenu] = useState(null);
+      const [itemModal, setItemModal] = useState(null);
+      const [treeMenu, setTreeMenu] = useState(null);
+      const itemDialogRef = useRef(null);
       const [settingsOpen, setSettingsOpen] = useState(false);
       const [settingsLoading, setSettingsLoading] = useState(false);
       const [settingsSaving, setSettingsSaving] = useState(false);
@@ -1833,13 +1837,141 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const openTaskModal = async (date) => {
-        setTaskModal({
-          date,
+      const openItemModal = async (kind) => {
+        const executionId = Number(selection.executionId) || 0;
+        if (!executionId) return;
+        setItemModal({
+          kind,
           title: '',
           description: '',
-          deadline: date,
-          executionId: '',
+          acceptance: '',
+          priority: '3',
+          assignedTo: '',
+          users: [],
+          loading: true,
+          submitting: false,
+          error: '',
+          executionId,
+          executionName: selection.executionName || '',
+          projectId: Number(selection.projectId) || 0,
+          productId: 0,
+        });
+        try {
+          const iterations = await api('/zentao/api/iterations');
+          if (!iterations || !iterations.ok) throw new Error((iterations && iterations.error) || '读取迭代信息失败');
+          const execution = (iterations.iterations || []).find((item) => Number(item.id) === executionId);
+          if (!execution) throw new Error('当前迭代不在可写列表中');
+          setItemModal((prev) =>
+            prev
+              ? Object.assign({}, prev, {
+                  productId: Number(execution.productId) || 0,
+                  executionName: execution.name || prev.executionName,
+                  projectId: Number(execution.projectId) || prev.projectId,
+                })
+              : prev,
+          );
+          const users = await api('/zentao/api/iteration-users?executionId=' + executionId).catch(() => null);
+          setItemModal((prev) =>
+            prev
+              ? Object.assign({}, prev, {
+                  users: users && users.ok ? users.users || [] : [],
+                  loading: false,
+                })
+              : prev,
+          );
+        } catch (error) {
+          setItemModal((prev) => (prev ? Object.assign({}, prev, { loading: false, error: error.message }) : prev));
+        }
+      };
+
+      const submitItemModal = async () => {
+        if (!itemModal || itemModal.submitting) return;
+        const title = String(itemModal.title || '').trim();
+        if (!title) {
+          setItemModal((prev) => (prev ? Object.assign({}, prev, { error: '请填写标题' }) : prev));
+          return;
+        }
+        if (!itemModal.productId) {
+          setItemModal((prev) => (prev ? Object.assign({}, prev, { error: '无法确定所属产品，请确认迭代信息' }) : prev));
+          return;
+        }
+        setItemModal((prev) => (prev ? Object.assign({}, prev, { submitting: true, error: '' }) : prev));
+        try {
+          const res = await api('/zentao/api/create', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({
+              kind: itemModal.kind,
+              productId: itemModal.productId,
+              projectId: itemModal.projectId,
+              executionId: itemModal.executionId,
+              title,
+              description: itemModal.description || '',
+              acceptance: itemModal.acceptance || '',
+              steps: itemModal.description || '',
+              priority: Number(itemModal.priority) || 3,
+              assignedTo: itemModal.assignedTo || '',
+            }),
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || '创建失败');
+          setItemModal(null);
+          if (selection.executionId) loadItems(selection.executionId);
+          loadDashboard(true);
+        } catch (error) {
+          setItemModal((prev) => (prev ? Object.assign({}, prev, { submitting: false, error: error.message }) : prev));
+        }
+      };
+
+      const changeTreeStatus = async (key) => {
+        if (!treeMenu) return;
+        const target = treeMenu;
+        setTreeMenu(null);
+        try {
+          const res = await api('/zentao/api/status', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({
+              targetType: target.type,
+              id: target.id,
+              statusKey: key,
+              current: target.status,
+            }),
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || '修改状态失败');
+          loadTree();
+          if (target.type === 'execution') {
+            if (selection.projectId) loadExecs(selection.projectId);
+            if (selection.executionId === target.id) loadItems(target.id);
+          }
+        } catch (error) {
+          setActionError(error.message);
+        }
+      };
+
+      useEffect(() => {
+        const dialog = itemDialogRef.current;
+        if (!dialog) return;
+        if (itemModal && !dialog.open) {
+          try {
+            dialog.showModal();
+          } catch (error) {
+            /* already open */
+          }
+        }
+        if (!itemModal && dialog.open) dialog.close();
+      }, [itemModal]);
+
+      const openTaskModal = async (date, presetExecutionId) => {
+        const fallbackDate = (() => {
+          const now = new Date();
+          return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        })();
+        setTaskModal({
+          date: date || fallbackDate,
+          title: '',
+          description: '',
+          deadline: date || fallbackDate,
+          executionId: presetExecutionId ? String(presetExecutionId) : '',
           projectId: 0,
           assignedTo: '',
           iterationOpen: false,
@@ -1860,7 +1992,25 @@ window.__ModuleLoader__.load({
         try {
           const res = await api('/zentao/api/iterations');
           if (!res || !res.ok) throw new Error((res && res.error) || '读取迭代列表失败');
-          setTaskModal((prev) => (prev ? Object.assign({}, prev, { iterations: res.iterations || [], loading: false }) : prev));
+          const iterations = res.iterations || [];
+          const preset = presetExecutionId
+            ? iterations.find((item) => Number(item.id) === Number(presetExecutionId))
+            : null;
+          setTaskModal((prev) =>
+            prev
+              ? Object.assign({}, prev, {
+                  iterations,
+                  loading: false,
+                  executionId: preset ? String(preset.id) : prev.executionId,
+                  projectId: preset ? preset.projectId : prev.projectId,
+                })
+              : prev,
+          );
+          if (preset) {
+            // Prefill the current iteration exactly like picking it manually.
+            loadTaskModalUsers(preset.id);
+            loadTaskModalStories(preset.id);
+          }
         } catch (error) {
           setTaskModal((prev) => (prev ? Object.assign({}, prev, { loading: false, error: error.message }) : prev));
         }
@@ -2411,6 +2561,18 @@ window.__ModuleLoader__.load({
           window.removeEventListener('resize', close);
         };
       }, [cellEditor]);
+
+      useEffect(() => {
+        if (!listMenu) return undefined;
+        const onKey = (event) => {
+          if (event.key === 'Escape') {
+            setListMenu(null);
+            setTreeMenu(null);
+          }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, [listMenu]);
 
       useEffect(() => {
         if (!actionError) return undefined;
@@ -4493,6 +4655,153 @@ window.__ModuleLoader__.load({
         },
         h('style', { key: 'zt-style' }, CSS),
         taskModal ? renderTaskModal() : null,
+        itemModal
+          ? h(
+              'dialog',
+              {
+                className: 'zt-modal-dialog',
+                ref: itemDialogRef,
+                'aria-label': itemModal.kind === 'story' ? '新建需求' : '新建 BUG',
+                onCancel: (event) => {
+                  event.preventDefault();
+                  setItemModal(null);
+                },
+              },
+              h(
+                'div',
+                { className: 'zt-modal', role: 'dialog', 'aria-modal': 'true' },
+                h(
+                  'div',
+                  { className: 'zt-modal-head' },
+                  h('span', { className: 'zt-modal-title' }, itemModal.kind === 'story' ? '新建需求' : '新建 BUG'),
+                  h(
+                    'button',
+                    { className: 'zt-modal-close', type: 'button', title: '关闭', 'aria-label': '关闭', onClick: () => setItemModal(null) },
+                    h(GlyphIcon, { name: 'close', size: 16 }),
+                  ),
+                ),
+                h(
+                  'div',
+                  { className: 'zt-modal-body' },
+                  h('div', { className: 'zt-modal-hint' }, '迭代：' + (itemModal.executionName || '当前迭代')),
+                  h(
+                    'label',
+                    { className: 'zt-field' },
+                    fieldLabel(itemModal.kind === 'story' ? '需求标题' : 'BUG 标题', true),
+                    h('input', {
+                      className: 'zt-input',
+                      value: itemModal.title,
+                      placeholder: itemModal.kind === 'story' ? '简要描述需求' : '简要描述问题',
+                      onChange: (event) =>
+                        setItemModal((prev) => (prev ? Object.assign({}, prev, { title: event.target.value, error: '' }) : prev)),
+                    }),
+                  ),
+                  h(
+                    'label',
+                    { className: 'zt-field' },
+                    fieldLabel('优先级', false),
+                    h(
+                      'select',
+                      {
+                        className: 'zt-input',
+                        value: itemModal.priority,
+                        onChange: (event) =>
+                          setItemModal((prev) => (prev ? Object.assign({}, prev, { priority: event.target.value }) : prev)),
+                      },
+                      h('option', { value: '1' }, 'P1'),
+                      h('option', { value: '2' }, 'P2'),
+                      h('option', { value: '3' }, 'P3'),
+                    ),
+                  ),
+                  h(
+                    'label',
+                    { className: 'zt-field' },
+                    fieldLabel('指派给', false),
+                    h(
+                      'select',
+                      {
+                        className: 'zt-input',
+                        value: itemModal.assignedTo,
+                        disabled: itemModal.loading,
+                        onChange: (event) =>
+                          setItemModal((prev) => (prev ? Object.assign({}, prev, { assignedTo: event.target.value }) : prev)),
+                      },
+                      h('option', { value: '' }, itemModal.loading ? '读取成员…' : '未指派'),
+                      (itemModal.users || []).map((user) => h('option', { key: user.value, value: user.value }, user.label)),
+                    ),
+                  ),
+                  h(
+                    'label',
+                    { className: 'zt-field' },
+                    fieldLabel(itemModal.kind === 'story' ? '需求描述' : '重现步骤', false),
+                    h('textarea', {
+                      className: 'zt-textarea',
+                      rows: 4,
+                      value: itemModal.description,
+                      placeholder: itemModal.kind === 'story' ? '背景、目标、范围等' : '操作步骤、实际结果等',
+                      onChange: (event) =>
+                        setItemModal((prev) => (prev ? Object.assign({}, prev, { description: event.target.value }) : prev)),
+                    }),
+                  ),
+                  itemModal.kind === 'story'
+                    ? h(
+                        'label',
+                        { className: 'zt-field' },
+                        fieldLabel('验收标准', false),
+                        h('textarea', {
+                          className: 'zt-textarea',
+                          rows: 3,
+                          value: itemModal.acceptance,
+                          placeholder: '怎样算完成',
+                          onChange: (event) =>
+                            setItemModal((prev) => (prev ? Object.assign({}, prev, { acceptance: event.target.value }) : prev)),
+                        }),
+                      )
+                    : null,
+                  itemModal.error ? h('div', { className: 'zt-field-error' }, itemModal.error) : null,
+                ),
+                h(
+                  'div',
+                  { className: 'zt-modal-foot' },
+                  h('button', { className: 'zt-btn zt-btn-ghost', type: 'button', onClick: () => setItemModal(null) }, '取消'),
+                  h(
+                    'button',
+                    { className: 'zt-btn zt-btn-primary', type: 'button', disabled: itemModal.submitting || itemModal.loading, onClick: submitItemModal },
+                    itemModal.submitting ? '创建中…' : '确定',
+                  ),
+                ),
+              ),
+            )
+          : null,
+        listMenu
+          ? [
+              h('div', { key: 'menu-backdrop', className: 'zt-menu-backdrop', onClick: () => setListMenu(null) }),
+              h(
+                'div',
+                { key: 'list-menu', className: 'zt-context-menu', style: { left: listMenu.x, top: listMenu.y }, role: 'menu' },
+                h(
+                  'button',
+                  {
+                    className: 'zt-context-item',
+                    type: 'button',
+                    role: 'menuitem',
+                    onClick: () => {
+                      const kind = listMenu.kind || 'task';
+                      setListMenu(null);
+                      if (kind === 'task') openTaskModal(undefined, selection.executionId);
+                      else openItemModal(kind);
+                    },
+                  },
+                  h(GlyphIcon, { name: 'plus', size: 14 }),
+                  h(
+                    'span',
+                    null,
+                    listMenu.kind === 'story' ? '新建需求' : listMenu.kind === 'bug' ? '新建 BUG' : '新建任务',
+                  ),
+                ),
+              ),
+            ]
+          : null,
         settingsOpen
           ? h(
               'dialog',
@@ -4858,6 +5167,18 @@ window.__ModuleLoader__.load({
                         draggable: true,
                         onDragStart: (e) => onDragStart(e, { type: 'project', id: project.id, title: project.name }),
                         onClick: () => toggleProject(project),
+                        onContextMenu: (event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setTreeMenu({
+                            type: 'project',
+                            id: project.id,
+                            name: project.name,
+                            status: project.status,
+                            x: Math.min(event.clientX, Math.max(8, window.innerWidth - 190)),
+                            y: Math.min(event.clientY, Math.max(8, window.innerHeight - 170)),
+                          });
+                        },
                       },
                       h(
                         'span',
@@ -4904,6 +5225,18 @@ window.__ModuleLoader__.load({
                                     projectName: project.name,
                                   }),
                                 onClick: () => selectExecution(project, exec),
+                                onContextMenu: (event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  setTreeMenu({
+                                    type: 'execution',
+                                    id: exec.id,
+                                    name: exec.name,
+                                    status: exec.status,
+                                    x: Math.min(event.clientX, Math.max(8, window.innerWidth - 190)),
+                                    y: Math.min(event.clientY, Math.max(8, window.innerHeight - 170)),
+                                  });
+                                },
                               },
                               h('span', { className: 'zt-name', title: exec.name }, exec.name),
                               h(
@@ -5013,7 +5346,26 @@ window.__ModuleLoader__.load({
         layout.leftOpen ? h('div', { className: 'zt-split', onMouseDown: (e) => startDrag('left', e) }) : null,
         h(
           'main',
-          { className: 'zt-main' + (view === 'dashboard' ? ' zt-main-dashboard' : '') },
+          {
+            className: 'zt-main' + (view === 'dashboard' ? ' zt-main-dashboard' : ''),
+            onDoubleClick: (event) => {
+              if (view === 'dashboard' || !['story', 'bug', 'task'].includes(tab) || !selection.executionId) return;
+              if (event.target.closest('tr, button, a, input, select, textarea, .zt-main-head, .zt-modal-dialog')) return;
+              event.preventDefault();
+              if (tab === 'task') openTaskModal(undefined, selection.executionId);
+              else openItemModal(tab);
+            },
+            onContextMenu: (event) => {
+              if (view === 'dashboard' || !['story', 'bug', 'task'].includes(tab) || !selection.executionId) return;
+              if (event.target.closest('tr, button, a, input, select, textarea, .zt-main-head, .zt-modal-dialog')) return;
+              event.preventDefault();
+              setListMenu({
+                kind: tab,
+                x: Math.min(event.clientX, Math.max(8, window.innerWidth - 190)),
+                y: Math.min(event.clientY, Math.max(8, window.innerHeight - 60)),
+              });
+            },
+          },
           view === 'dashboard' ? h('div', { className: 'zt-main-dragstrip', 'aria-hidden': true }) : null,
           view === 'dashboard' ? h('div', { className: 'zt-dashboard' }, renderDashboard()) : null,
           h(
@@ -5585,6 +5937,32 @@ window.__ModuleLoader__.load({
                 h(GlyphIcon, { name: 'chevron-left', size: 16 }),
               ),
             ),
+        treeMenu
+          ? [
+              h('div', { key: 'tree-backdrop', className: 'zt-menu-backdrop', onClick: () => setTreeMenu(null) }),
+              h(
+                'div',
+                { key: 'tree-menu', className: 'zt-context-menu', style: { left: treeMenu.x, top: treeMenu.y }, role: 'menu' },
+                h('div', { className: 'zt-context-head' }, treeMenu.name),
+                ['doing', 'suspended', 'closed'].map((key) =>
+                  h(
+                    'button',
+                    {
+                      key,
+                      type: 'button',
+                      className: 'zt-context-item' + (treeMenu.status === key ? ' zt-context-item-current' : ''),
+                      role: 'menuitem',
+                      disabled: treeMenu.status === key,
+                      onClick: () => changeTreeStatus(key),
+                    },
+                    h('span', { className: 'zt-status-dot zt-status-dot-' + key }),
+                    h('span', null, key === 'doing' ? '进行中' : key === 'suspended' ? '已挂起' : '已关闭'),
+                    treeMenu.status === key ? h('span', { className: 'zt-context-check' }, '当前') : null,
+                  ),
+                ),
+              ),
+            ]
+          : null,
         assignToast
           ? h(
               'div',
@@ -6646,6 +7024,16 @@ body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(-
 .zt-model-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .zt-hint{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;font-size:12px;line-height:18px;color:var(--dsw-alias-label-caption,var(--td-text-color-placeholder))}
 .zt-menu-backdrop{position:fixed;inset:0;z-index:39}
+.zt-context-menu{position:fixed;z-index:41;min-width:168px;padding:4px;border:1px solid var(--td-component-stroke);border-radius:8px;background:var(--td-bg-color-container);box-shadow:var(--td-shadow-3,0 6px 24px rgba(0,0,0,.12))}
+.zt-context-item{display:flex;align-items:center;gap:8px;width:100%;height:32px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--td-text-color-primary);font-size:13px;line-height:20px;text-align:left;cursor:pointer}
+.zt-context-item:hover{background:var(--td-bg-color-container-hover)}
+.zt-context-item svg{color:var(--td-text-color-secondary)}
+.zt-context-head{padding:6px 10px 8px;margin-bottom:2px;border-bottom:1px solid var(--td-component-stroke);color:var(--td-text-color-placeholder);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zt-context-item-current{color:var(--td-text-color-placeholder);cursor:default}
+.zt-context-check{margin-left:auto;font-size:11px;color:var(--td-text-color-placeholder)}
+.zt-context-item .zt-status-dot{width:6px;height:6px;border-radius:50%;background:var(--td-success-color)}
+.zt-context-item .zt-status-dot-suspended{background:var(--td-warning-color)}
+.zt-context-item .zt-status-dot-closed{background:var(--td-text-color-placeholder)}
 .zt-composer-menu{position:absolute;z-index:40;left:16px;bottom:calc(100% - 8px);width:min(320px,calc(100% - 32px));max-height:min(360px,60vh);display:flex;flex-direction:column;border-radius:10px;background:var(--td-bg-color-container);border:1px solid var(--td-component-stroke);box-shadow:var(--td-shadow-3,0 6px 24px rgba(0,0,0,.12));overflow:hidden}
 .zt-composer-menu-right{left:auto;right:16px}
 .zt-menu-head{padding:10px 12px 6px;font-size:12px;line-height:18px;color:var(--td-text-color-placeholder);flex:0 0 auto}
