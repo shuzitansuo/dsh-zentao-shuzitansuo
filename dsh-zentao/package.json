@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-zentao",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "private": true,
   "type": "module",
   "description": "禅道 AI 工作台：项目/迭代树、需求与 BUG 列表、DeepSeek 会话与录入",

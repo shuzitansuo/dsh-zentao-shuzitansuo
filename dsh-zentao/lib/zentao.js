@@ -731,19 +731,26 @@ export class ZenTaoClient {
   /** Allowed target statuses for a task, derived from its available actions. */
   async taskStatusOptions(taskId) {
     const task = await this.taskDetail(taskId);
-    const actions = await this.taskActions(taskId).catch(() => []);
-    const allowed = [];
-    const has = (action) => actions.includes(action);
-    if (has('start') || has('restart') || has('activate')) allowed.push('doing');
-    if (has('pause')) allowed.push('pause');
-    if (has('finish')) allowed.push('done');
-    if (has('cancel')) allowed.push('cancel');
-    if (has('close')) allowed.push('closed');
+    // Show the same six statuses as ZenTao's own task form. Workflow actions are
+    // tried first; unavailable transitions fall back to the edit form.
+    const all = ['wait', 'doing', 'done', 'pause', 'cancel', 'closed'];
     return {
       current: task.status,
       currentText: TASK_STATUS_TEXT[task.status] || task.status,
-      options: allowed.map((key) => ({ key, label: TASK_STATUS_TEXT[key] || key })),
+      options: all.map((key) => ({ key, label: TASK_STATUS_TEXT[key] || key })),
     };
+  }
+
+  /** Set a task status directly through the edit form (used when workflow
+   * actions are unavailable for the requested transition). */
+  async setTaskStatusDirect(taskId, statusKey) {
+    const pagePath = `/task-edit-${Number(taskId)}.html`;
+    const html = await this.#page(pagePath);
+    const form = parseFormFields(html);
+    form.status = String(statusKey);
+    const res = await this.post(pagePath, form);
+    const parsed = parseFormResponse(res, 'task-edit-status');
+    return Object.assign({ ok: true, status: statusKey }, parsed);
   }
 
   /** Assignable members for one task. */
@@ -782,10 +789,8 @@ export class ZenTaoClient {
                 : [];
     const action = candidates.find((name) => has(name));
     if (!action) {
-      throw new ZenTaoError(
-        `任务当前不允许改为「${TASK_STATUS_TEXT[statusKey] || statusKey}」，可用动作：${actions.join('、') || '无'}`,
-        'ZT_ACTION',
-      );
+      // 选择器展示全部状态；没有对应工作流动作时直接回放编辑表单。
+      return await this.setTaskStatusDirect(id, statusKey);
     }
     const pagePath = `/task-${action}-${id}.html`;
     const html = await this.#page(pagePath);

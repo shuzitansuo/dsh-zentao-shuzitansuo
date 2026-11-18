@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.0.8';
+    const PLUGIN_VERSION = 'v0.0.9';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
@@ -1004,6 +1004,16 @@ window.__ModuleLoader__.load({
       const [treeMenu, setTreeMenu] = useState(null);
       const [iterationModal, setIterationModal] = useState(null);
       const iterationDialogRef = useRef(null);
+      const [projectEmojis, setProjectEmojis] = useState(() => {
+        try {
+          const saved = JSON.parse(localStorage.getItem('dsh-zentao-project-emoji-v1') || '{}');
+          return saved && typeof saved === 'object' ? saved : {};
+        } catch (error) {
+          return {};
+        }
+      });
+      const [emojiModal, setEmojiModal] = useState(null);
+      const emojiDialogRef = useRef(null);
       const itemDialogRef = useRef(null);
       const [settingsOpen, setSettingsOpen] = useState(false);
       const [settingsLoading, setSettingsLoading] = useState(false);
@@ -1026,7 +1036,7 @@ window.__ModuleLoader__.load({
       const [editingTitle, setEditingTitle] = useState('');
       const copiedTimerRef = useRef(null);
       const [assignToastOn, setAssignToastOn] = useState(assignToastEnabled);
-      const assignNotifiedRef = useRef(0);
+      const assignNotifiedRef = useRef(null);
       const [iterationOptions, setIterationOptions] = useState(null);
       const [iterationLoading, setIterationLoading] = useState(false);
       const [modelState, setModelState] = useState(null);
@@ -1163,6 +1173,12 @@ window.__ModuleLoader__.load({
             disabled: assignmentStore.disabled,
           };
           setAssignEvents(next);
+          // Ignore the empty pre-fetch store; the first real snapshot sets the baseline.
+          if (!assignmentStore.loaded) return;
+          if (assignNotifiedRef.current === null) {
+            assignNotifiedRef.current = next.unread;
+            return;
+          }
           if (
             next.unread > assignNotifiedRef.current &&
             assignToastEnabled() &&
@@ -1443,6 +1459,23 @@ window.__ModuleLoader__.load({
           const data = await api('/zentao/api/tree' + (fresh ? '?fresh=1' : ''));
           const list = data.projects || [];
           setProjects(list);
+          // Keep pinned labels in sync when a project is renamed.
+          if (list.length) {
+            const names = new Map(list.map((project) => [project.id, project.name]));
+            setPinned((prev) => {
+              let changed = false;
+              const next = prev.map((item) => {
+                const name = names.get(item.projectId);
+                if (name && name !== item.projectName) {
+                  changed = true;
+                  return Object.assign({}, item, { projectName: name });
+                }
+                return item;
+              });
+              if (changed) savePinned(next);
+              return changed ? next : prev;
+            });
+          }
           if (data.baseUrl) setBaseUrl(data.baseUrl);
           setTreeError('');
           const preferred = list.find((p) => p.name && p.name.indexOf('DSH') >= 0) || list[0];
@@ -1491,7 +1524,26 @@ window.__ModuleLoader__.load({
         setExecs((prev) => Object.assign({}, prev, { [projectId]: prev[projectId] || [] }));
         try {
           const data = await api('/zentao/api/executions?projectId=' + projectId + (fresh ? '&fresh=1' : ''));
-          setExecs((prev) => Object.assign({}, prev, { [projectId]: data.executions || [] }));
+          const executions = data.executions || [];
+          setExecs((prev) => Object.assign({}, prev, { [projectId]: executions }));
+          // Pinned iterations keep only a snapshot; refresh it after renames.
+          if (executions.length) {
+            const names = new Map(executions.map((execution) => [execution.id, execution.name]));
+            setPinned((prev) => {
+              let changed = false;
+              const next = prev.map((item) => {
+                if (item.projectId !== projectId) return item;
+                const name = names.get(item.executionId);
+                if (name && name !== item.executionName) {
+                  changed = true;
+                  return Object.assign({}, item, { executionName: name });
+                }
+                return item;
+              });
+              if (changed) savePinned(next);
+              return changed ? next : prev;
+            });
+          }
         } catch (error) {
           setExecs((prev) => Object.assign({}, prev, { [projectId]: [] }));
         }
@@ -2026,6 +2078,27 @@ window.__ModuleLoader__.load({
       };
 
       useEffect(() => {
+        try {
+          localStorage.setItem('dsh-zentao-project-emoji-v1', JSON.stringify(projectEmojis));
+        } catch (error) {
+          /* ignore quota errors */
+        }
+      }, [projectEmojis]);
+
+      useEffect(() => {
+        const dialog = emojiDialogRef.current;
+        if (!dialog) return;
+        if (emojiModal && !dialog.open) {
+          try {
+            dialog.showModal();
+          } catch (error) {
+            /* already open */
+          }
+        }
+        if (!emojiModal && dialog.open) dialog.close();
+      }, [emojiModal]);
+
+      useEffect(() => {
         const dialog = iterationDialogRef.current;
         if (!dialog) return;
         if (iterationModal && !dialog.open) {
@@ -2061,6 +2134,7 @@ window.__ModuleLoader__.load({
           title: '',
           description: '',
           deadline: date || fallbackDate,
+          priority: '3',
           executionId: presetExecutionId ? String(presetExecutionId) : '',
           projectId: 0,
           assignedTo: '',
@@ -2159,6 +2233,7 @@ window.__ModuleLoader__.load({
               title,
               description: String(taskModal.description || '').trim(),
               assignedTo: taskModal.assignedTo,
+              priority: Number(taskModal.priority) || 3,
               deadline: taskModal.deadline || taskModal.date,
               executionId: iteration.id,
               projectId: iteration.projectId,
@@ -2184,13 +2259,14 @@ window.__ModuleLoader__.load({
         setTreeBusy(true);
         try {
           await loadTree(true);
-          const ids = Object.keys(execs);
+          // Include pinned projects even when the tree node is collapsed.
+          const ids = [...new Set([...Object.keys(execs), ...pinned.map((item) => String(item.projectId))])];
           await Promise.all(ids.map((pid) => loadExecs(Number(pid), true)));
           if (selection.executionId) await loadItems(selection.executionId, true);
         } finally {
           setTreeBusy(false);
         }
-      }, [execs, selection.executionId, loadTree, loadExecs, loadItems]);
+      }, [execs, pinned, selection.executionId, loadTree, loadExecs, loadItems]);
 
       // Refresh the tree when the page becomes visible again (auto refresh).
       useEffect(() => {
@@ -2663,6 +2739,12 @@ window.__ModuleLoader__.load({
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
       }, [listMenu]);
+
+      useEffect(() => {
+        if (!assignToast) return undefined;
+        const timer = setTimeout(() => setAssignToast(null), 6000);
+        return () => clearTimeout(timer);
+      }, [assignToast]);
 
       useEffect(() => {
         if (!actionError) return undefined;
@@ -4420,6 +4502,23 @@ window.__ModuleLoader__.load({
                 ),
               ),
               h(
+                'label',
+                { className: 'zt-field' },
+                fieldLabel('优先级', false),
+                h(
+                  'select',
+                  {
+                    className: 'zt-input',
+                    value: taskModal.priority || '3',
+                    onChange: (event) =>
+                      setTaskModal((prev) => (prev ? Object.assign({}, prev, { priority: event.target.value }) : prev)),
+                  },
+                  h('option', { value: '1' }, 'P1'),
+                  h('option', { value: '2' }, 'P2'),
+                  h('option', { value: '3' }, 'P3'),
+                ),
+              ),
+              h(
                 'div',
                 { className: 'zt-field', onClick: (event) => event.stopPropagation() },
                 fieldLabel('指派给', true),
@@ -4745,6 +4844,106 @@ window.__ModuleLoader__.load({
         },
         h('style', { key: 'zt-style' }, CSS),
         taskModal ? renderTaskModal() : null,
+        emojiModal
+          ? h(
+              'dialog',
+              {
+                className: 'zt-modal-dialog',
+                ref: emojiDialogRef,
+                'aria-label': '自定义Emoji',
+                onCancel: (event) => {
+                  event.preventDefault();
+                  setEmojiModal(null);
+                },
+              },
+              h(
+                'div',
+                { className: 'zt-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': '自定义Emoji' },
+                h(
+                  'div',
+                  { className: 'zt-modal-head' },
+                  h('span', { className: 'zt-modal-title' }, '自定义 Emoji'),
+                  h(
+                    'button',
+                    { className: 'zt-modal-close', type: 'button', title: '关闭', 'aria-label': '关闭', onClick: () => setEmojiModal(null) },
+                    h(GlyphIcon, { name: 'close', size: 16 }),
+                  ),
+                ),
+                h(
+                  'div',
+                  { className: 'zt-modal-body' },
+                  h('div', { className: 'zt-modal-hint' }, '项目：' + (emojiModal.projectName || '')),
+                  h(
+                    'label',
+                    { className: 'zt-field' },
+                    fieldLabel('Emoji', false),
+                    h('input', {
+                      className: 'zt-input',
+                      value: emojiModal.value,
+                      maxLength: 8,
+                      placeholder: '输入或粘贴一个 Emoji，例如 🚀',
+                      onChange: (event) => setEmojiModal((prev) => (prev ? Object.assign({}, prev, { value: event.target.value }) : prev)),
+                    }),
+                  ),
+                  h(
+                    'div',
+                    { className: 'zt-emoji-grid' },
+                    [
+                      '📁', '📂', '📦', '🗂️', '🚀', '🛠️', '⚙️', '🧰',
+                      '🧪', '🔬', '📊', '📈', '📉', '💡', '🎯', '🔥',
+                      '⭐', '✨', '🧩', '🐞', '🐛', '✅', '☑️', '📝',
+                      '📋', '🗒️', '🎨', '🖌️', '🏷️', '🔖', '📌', '📍',
+                      '🧭', '🗺️', '🏗️', '🏭', '💻', '🖥️', '📱', '☁️',
+                      '🔒', '🔑', '🧠', '🤖', '🌐', '🛰️', '📡', '🧮',
+                    ].map((emoji) =>
+                      h(
+                        'button',
+                        {
+                          key: emoji,
+                          type: 'button',
+                          className: 'zt-emoji-option' + (emojiModal.value === emoji ? ' zt-emoji-option-active' : ''),
+                          onClick: () => setEmojiModal((prev) => (prev ? Object.assign({}, prev, { value: emoji }) : prev)),
+                        },
+                        emoji,
+                      ),
+                    ),
+                  ),
+                  h(
+                    'button',
+                    {
+                      className: 'zt-link-btn',
+                      type: 'button',
+                      onClick: () => setEmojiModal((prev) => (prev ? Object.assign({}, prev, { value: '' }) : prev)),
+                    },
+                    '恢复默认图标',
+                  ),
+                ),
+                h(
+                  'div',
+                  { className: 'zt-modal-foot' },
+                  h('button', { className: 'zt-btn zt-btn-ghost', type: 'button', onClick: () => setEmojiModal(null) }, '取消'),
+                  h(
+                    'button',
+                    {
+                      className: 'zt-btn zt-btn-primary',
+                      type: 'button',
+                      onClick: () => {
+                        const value = String(emojiModal.value || '').trim();
+                        setProjectEmojis((prev) => {
+                          const next = Object.assign({}, prev);
+                          if (value) next[emojiModal.projectId] = value;
+                          else delete next[emojiModal.projectId];
+                          return next;
+                        });
+                        setEmojiModal(null);
+                      },
+                    },
+                    '保存',
+                  ),
+                ),
+              ),
+            )
+          : null,
         iterationModal
           ? h(
               'dialog',
@@ -5386,11 +5585,13 @@ window.__ModuleLoader__.load({
                       h(
                         'span',
                         { className: 'zt-tree-icon' + (open ? ' zt-tree-icon-open' : '') },
-                        h(
-                          'span',
-                          { className: 'zt-tree-icon-folder' },
-                          h(GlyphIcon, { name: open ? 'folder-open' : 'folder', size: 16 }),
-                        ),
+                        projectEmojis[project.id]
+                          ? h('span', { className: 'zt-tree-emoji', 'aria-hidden': true }, projectEmojis[project.id])
+                          : h(
+                              'span',
+                              { className: 'zt-tree-icon-folder' },
+                              h(GlyphIcon, { name: open ? 'folder-open' : 'folder', size: 16 }),
+                            ),
                         h(
                           'span',
                           { className: 'zt-tree-icon-caret' },
@@ -6173,6 +6374,25 @@ window.__ModuleLoader__.load({
                         ),
                         h('div', { className: 'zt-context-menu zt-context-sub', role: 'menu' }, treeStatusItems()),
                       ),
+                      h(
+                        'button',
+                        {
+                          key: 'custom-emoji',
+                          type: 'button',
+                          className: 'zt-context-item',
+                          role: 'menuitem',
+                          onClick: () => {
+                            setTreeMenu(null);
+                            setEmojiModal({
+                              projectId: treeMenu.id,
+                              projectName: treeMenu.name,
+                              value: projectEmojis[treeMenu.id] || '',
+                            });
+                          },
+                        },
+                        h('span', { className: 'zt-context-emoji' }, projectEmojis[treeMenu.id] || '🙂'),
+                        h('span', null, '自定义Emoji'),
+                      ),
                     ]
                   : treeStatusItems(),
               ),
@@ -6185,7 +6405,7 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'zt-assign-toast-head' },
-                h('span', null, '指派提醒' + (assignEvents.unread ? ' · ' + assignEvents.unread : '')),
+                h('span', null, '新指派提醒'),
                 h(
                   'button',
                   {
@@ -6201,7 +6421,7 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'zt-assign-toast-body' },
-                assignEvents.events.slice(0, 3).map((event) =>
+                [assignToast].filter(Boolean).map((event) =>
                   h(
                     'div',
                     { key: event.id, className: 'zt-assign-toast-row' },
@@ -6804,6 +7024,15 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-tree-icon-folder{display:inline-flex;align-items:center;justify-content:center}
 .zt-tree-icon-caret{display:none;align-items:center;justify-content:center;color:var(--zt-icon)}
 .zt-tree-project:hover .zt-tree-icon-folder{display:none}
+.zt-tree-project:hover .zt-tree-emoji{display:none}
+.zt-tree-emoji{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;font-size:15px;line-height:18px}
+.zt-context-emoji{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;font-size:13px;line-height:14px}
+.zt-emoji-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:6px}
+.zt-emoji-option{height:32px;border:1px solid var(--td-component-stroke);border-radius:6px;background:var(--td-bg-color-container);font-size:17px;line-height:30px;cursor:pointer}
+.zt-emoji-option:hover{border-color:var(--td-brand-color);background:var(--td-bg-color-container-hover)}
+.zt-emoji-option-active{border-color:var(--td-brand-color);background:var(--td-brand-color-light)}
+.zt-link-btn{align-self:flex-start;padding:0;border:0;background:transparent;color:var(--td-text-color-brand);font-size:12px;cursor:pointer}
+.zt-link-btn:hover{text-decoration:underline}
 .zt-tree-project:hover .zt-tree-icon-caret{display:inline-flex}
 .zt-tree-children-wrap{display:grid;grid-template-rows:0fr;transition:grid-template-rows .22s cubic-bezier(.4,0,.2,1)}
 .zt-tree-children-wrap.zt-tree-children-open{grid-template-rows:1fr}
@@ -7316,7 +7545,9 @@ body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(-
 .zt-assign-actions .zt-icon-btn{width:24px;height:24px}
 .zt-assign-empty{padding:12px 8px;font-size:12px;color:var(--td-text-color-placeholder)}
 .zt-assign-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-top:1px solid var(--td-component-stroke);flex:0 0 auto;font-size:12px;color:var(--td-text-color-secondary)}
-.zt-assign-toast{position:absolute;right:16px;top:56px;z-index:45;width:300px;max-width:calc(100% - 32px);display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-radius:10px;background:var(--td-bg-color-container);border:1px solid var(--td-component-stroke);box-shadow:var(--td-shadow-3,0 6px 24px rgba(0,0,0,.12));-webkit-app-region:no-drag}
+.zt-assign-toast{position:absolute;right:16px;top:56px;z-index:45;width:300px;max-width:calc(100% - 32px);display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-radius:10px;background:#fff7e6;border:1px solid #f0c36d;border-left:3px solid #ed7b2f;box-shadow:0 8px 28px rgba(0,0,0,.16);-webkit-app-region:no-drag}
+body[data-ds-dark-theme] .zt-root .zt-assign-toast{background:#2e2718;border-color:#6b5420;border-left-color:#ed7b2f}
+body[data-ds-dark-theme] .zt-root .zt-assign-toast-head{color:#f0d9a8}
 .zt-assign-toast-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;line-height:18px;color:var(--td-text-color-secondary)}
 .zt-assign-toast-body{display:flex;flex-direction:column;gap:4px}
 .zt-assign-toast-row{display:flex;align-items:center;gap:6px;min-width:0;font:var(--td-font-body-medium)}
