@@ -856,6 +856,19 @@ export function apply(ctx, config = {}) {
       return json(res, 200, result);
     }
 
+    if (method === 'POST' && path === 'execution-create') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.createExecution(body);
+        invalidate('tree');
+        invalidate('exec:');
+        invalidate('items:');
+        return json(res, 200, result);
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
     if (method === 'POST' && path === 'status') {
       const body = JSON.parse((await readBody(req)) || '{}');
       const result = await changeStatus(client, body, STATUS_OPTIONS);

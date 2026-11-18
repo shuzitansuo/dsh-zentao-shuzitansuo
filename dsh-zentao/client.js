@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.0.7';
+    const PLUGIN_VERSION = 'v0.0.8';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
@@ -1002,6 +1002,8 @@ window.__ModuleLoader__.load({
       const [listMenu, setListMenu] = useState(null);
       const [itemModal, setItemModal] = useState(null);
       const [treeMenu, setTreeMenu] = useState(null);
+      const [iterationModal, setIterationModal] = useState(null);
+      const iterationDialogRef = useRef(null);
       const itemDialogRef = useRef(null);
       const [settingsOpen, setSettingsOpen] = useState(false);
       const [settingsLoading, setSettingsLoading] = useState(false);
@@ -1922,6 +1924,81 @@ window.__ModuleLoader__.load({
         }
       };
 
+      const openIterationModal = (project) => {
+        const now = new Date();
+        const iso = (date) =>
+          date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+        const end = new Date(now);
+        end.setDate(now.getDate() + 13);
+        setTreeMenu(null);
+        setIterationModal({
+          projectId: project.id,
+          projectName: project.name,
+          name: '',
+          code: '',
+          begin: iso(now),
+          end: iso(end),
+          status: 'wait',
+          submitting: false,
+          error: '',
+        });
+      };
+
+      const submitIterationModal = async () => {
+        if (!iterationModal || iterationModal.submitting) return;
+        const name = String(iterationModal.name || '').trim();
+        if (!name) {
+          setIterationModal((prev) => (prev ? Object.assign({}, prev, { error: '请填写迭代名称' }) : prev));
+          return;
+        }
+        if (!iterationModal.begin || !iterationModal.end || iterationModal.end < iterationModal.begin) {
+          setIterationModal((prev) => (prev ? Object.assign({}, prev, { error: '结束日期需晚于开始日期' }) : prev));
+          return;
+        }
+        setIterationModal((prev) => (prev ? Object.assign({}, prev, { submitting: true, error: '' }) : prev));
+        try {
+          const res = await api('/zentao/api/execution-create', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({
+              projectId: iterationModal.projectId,
+              name,
+              code: String(iterationModal.code || '').trim(),
+              begin: iterationModal.begin,
+              end: iterationModal.end,
+              status: iterationModal.status,
+            }),
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || '创建迭代失败');
+          const projectId = iterationModal.projectId;
+          setIterationModal(null);
+          setOpenProjects((prev) => Object.assign({}, prev, { [projectId]: true }));
+          loadTree();
+          loadExecs(projectId);
+          loadDashboard(true);
+        } catch (error) {
+          setIterationModal((prev) => (prev ? Object.assign({}, prev, { submitting: false, error: error.message }) : prev));
+        }
+      };
+
+      const treeStatusItems = () =>
+        ['doing', 'suspended', 'closed'].map((key) =>
+          h(
+            'button',
+            {
+              key,
+              type: 'button',
+              className: 'zt-context-item' + (treeMenu && treeMenu.status === key ? ' zt-context-item-current' : ''),
+              role: 'menuitem',
+              disabled: Boolean(treeMenu && treeMenu.status === key),
+              onClick: () => changeTreeStatus(key),
+            },
+            h('span', { className: 'zt-status-dot zt-status-dot-' + key }),
+            h('span', null, key === 'doing' ? '进行中' : key === 'suspended' ? '已挂起' : '已关闭'),
+            treeMenu && treeMenu.status === key ? h('span', { className: 'zt-context-check' }, '当前') : null,
+          ),
+        );
+
       const changeTreeStatus = async (key) => {
         if (!treeMenu) return;
         const target = treeMenu;
@@ -1947,6 +2024,19 @@ window.__ModuleLoader__.load({
           setActionError(error.message);
         }
       };
+
+      useEffect(() => {
+        const dialog = iterationDialogRef.current;
+        if (!dialog) return;
+        if (iterationModal && !dialog.open) {
+          try {
+            dialog.showModal();
+          } catch (error) {
+            /* already open */
+          }
+        }
+        if (!iterationModal && dialog.open) dialog.close();
+      }, [iterationModal]);
 
       useEffect(() => {
         const dialog = itemDialogRef.current;
@@ -4655,6 +4745,119 @@ window.__ModuleLoader__.load({
         },
         h('style', { key: 'zt-style' }, CSS),
         taskModal ? renderTaskModal() : null,
+        iterationModal
+          ? h(
+              'dialog',
+              {
+                className: 'zt-modal-dialog',
+                ref: iterationDialogRef,
+                'aria-label': '创建迭代',
+                onCancel: (event) => {
+                  event.preventDefault();
+                  setIterationModal(null);
+                },
+              },
+              h(
+                'div',
+                { className: 'zt-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': '创建迭代' },
+                h(
+                  'div',
+                  { className: 'zt-modal-head' },
+                  h('span', { className: 'zt-modal-title' }, '创建迭代'),
+                  h(
+                    'button',
+                    { className: 'zt-modal-close', type: 'button', title: '关闭', 'aria-label': '关闭', onClick: () => setIterationModal(null) },
+                    h(GlyphIcon, { name: 'close', size: 16 }),
+                  ),
+                ),
+                h(
+                  'div',
+                  { className: 'zt-modal-body' },
+                  h('div', { className: 'zt-modal-hint' }, '项目：' + (iterationModal.projectName || '')),
+                  h(
+                    'label',
+                    { className: 'zt-field' },
+                    fieldLabel('迭代名称', true),
+                    h('input', {
+                      className: 'zt-input',
+                      value: iterationModal.name,
+                      placeholder: '例如 Sprint 25 迭代',
+                      onChange: (event) =>
+                        setIterationModal((prev) => (prev ? Object.assign({}, prev, { name: event.target.value, error: '' }) : prev)),
+                    }),
+                  ),
+                  h(
+                    'label',
+                    { className: 'zt-field' },
+                    fieldLabel('迭代代号', false),
+                    h('input', {
+                      className: 'zt-input',
+                      value: iterationModal.code,
+                      placeholder: '留空自动生成',
+                      onChange: (event) =>
+                        setIterationModal((prev) => (prev ? Object.assign({}, prev, { code: event.target.value }) : prev)),
+                    }),
+                  ),
+                  h(
+                    'div',
+                    { className: 'zt-modal-grid2' },
+                    h(
+                      'label',
+                      { className: 'zt-field' },
+                      fieldLabel('开始日期', true),
+                      h('input', {
+                        className: 'zt-input',
+                        type: 'date',
+                        value: iterationModal.begin,
+                        onChange: (event) =>
+                          setIterationModal((prev) => (prev ? Object.assign({}, prev, { begin: event.target.value, error: '' }) : prev)),
+                      }),
+                    ),
+                    h(
+                      'label',
+                      { className: 'zt-field' },
+                      fieldLabel('结束日期', true),
+                      h('input', {
+                        className: 'zt-input',
+                        type: 'date',
+                        value: iterationModal.end,
+                        onChange: (event) =>
+                          setIterationModal((prev) => (prev ? Object.assign({}, prev, { end: event.target.value, error: '' }) : prev)),
+                      }),
+                    ),
+                  ),
+                  h(
+                    'label',
+                    { className: 'zt-field' },
+                    fieldLabel('状态', false),
+                    h(
+                      'select',
+                      {
+                        className: 'zt-input',
+                        value: iterationModal.status,
+                        onChange: (event) =>
+                          setIterationModal((prev) => (prev ? Object.assign({}, prev, { status: event.target.value }) : prev)),
+                      },
+                      h('option', { value: 'wait' }, '未开始'),
+                      h('option', { value: 'doing' }, '进行中'),
+                    ),
+                  ),
+                  h('div', { className: 'zt-modal-hint' }, '团队成员：沿用项目现有成员'),
+                  iterationModal.error ? h('div', { className: 'zt-field-error' }, iterationModal.error) : null,
+                ),
+                h(
+                  'div',
+                  { className: 'zt-modal-foot' },
+                  h('button', { className: 'zt-btn zt-btn-ghost', type: 'button', onClick: () => setIterationModal(null) }, '取消'),
+                  h(
+                    'button',
+                    { className: 'zt-btn zt-btn-primary', type: 'button', disabled: iterationModal.submitting, onClick: submitIterationModal },
+                    iterationModal.submitting ? '创建中…' : '创建',
+                  ),
+                ),
+              ),
+            )
+          : null,
         itemModal
           ? h(
               'dialog',
@@ -5944,22 +6147,34 @@ window.__ModuleLoader__.load({
                 'div',
                 { key: 'tree-menu', className: 'zt-context-menu', style: { left: treeMenu.x, top: treeMenu.y }, role: 'menu' },
                 h('div', { className: 'zt-context-head' }, treeMenu.name),
-                ['doing', 'suspended', 'closed'].map((key) =>
-                  h(
-                    'button',
-                    {
-                      key,
-                      type: 'button',
-                      className: 'zt-context-item' + (treeMenu.status === key ? ' zt-context-item-current' : ''),
-                      role: 'menuitem',
-                      disabled: treeMenu.status === key,
-                      onClick: () => changeTreeStatus(key),
-                    },
-                    h('span', { className: 'zt-status-dot zt-status-dot-' + key }),
-                    h('span', null, key === 'doing' ? '进行中' : key === 'suspended' ? '已挂起' : '已关闭'),
-                    treeMenu.status === key ? h('span', { className: 'zt-context-check' }, '当前') : null,
-                  ),
-                ),
+                treeMenu.type === 'project'
+                  ? [
+                      h(
+                        'button',
+                        {
+                          key: 'create-iteration',
+                          type: 'button',
+                          className: 'zt-context-item',
+                          role: 'menuitem',
+                          onClick: () => openIterationModal({ id: treeMenu.id, name: treeMenu.name }),
+                        },
+                        h(GlyphIcon, { name: 'plus', size: 14 }),
+                        h('span', null, '创建迭代'),
+                      ),
+                      h(
+                        'div',
+                        { key: 'status-subwrap', className: 'zt-context-subwrap' },
+                        h(
+                          'button',
+                          { type: 'button', className: 'zt-context-item', role: 'menuitem' },
+                          h(GlyphIcon, { name: 'settings', size: 14 }),
+                          h('span', null, '修改状态'),
+                          h('span', { className: 'zt-context-caret' }, h(GlyphIcon, { name: 'chevron-right', size: 12 })),
+                        ),
+                        h('div', { className: 'zt-context-menu zt-context-sub', role: 'menu' }, treeStatusItems()),
+                      ),
+                    ]
+                  : treeStatusItems(),
               ),
             ]
           : null,
@@ -7034,6 +7249,12 @@ body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(-
 .zt-context-item .zt-status-dot{width:6px;height:6px;border-radius:50%;background:var(--td-success-color)}
 .zt-context-item .zt-status-dot-suspended{background:var(--td-warning-color)}
 .zt-context-item .zt-status-dot-closed{background:var(--td-text-color-placeholder)}
+.zt-context-subwrap{position:relative}
+.zt-context-sub{display:none;position:absolute;left:calc(100% + 4px);top:-4px;min-width:148px}
+.zt-context-subwrap:hover .zt-context-sub{display:block}
+.zt-context-subwrap>.zt-context-item{width:100%}
+.zt-context-caret{display:inline-flex;align-items:center;margin-left:auto;color:var(--td-text-color-placeholder)}
+.zt-modal-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .zt-composer-menu{position:absolute;z-index:40;left:16px;bottom:calc(100% - 8px);width:min(320px,calc(100% - 32px));max-height:min(360px,60vh);display:flex;flex-direction:column;border-radius:10px;background:var(--td-bg-color-container);border:1px solid var(--td-component-stroke);box-shadow:var(--td-shadow-3,0 6px 24px rgba(0,0,0,.12));overflow:hidden}
 .zt-composer-menu-right{left:auto;right:16px}
 .zt-menu-head{padding:10px 12px 6px;font-size:12px;line-height:18px;color:var(--td-text-color-placeholder);flex:0 0 auto}

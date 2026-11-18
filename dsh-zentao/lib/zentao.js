@@ -1353,7 +1353,8 @@ export class ZenTaoClient {
     form.set('end', end);
     form.set('days', String((input && input.days) || workingDays(begin, end)));
     form.set('lifetime', (input && input.lifetime) || 'short');
-    form.set('status', 'wait');
+    const status = ['wait', 'doing'].includes(input && input.status) ? input.status : 'wait';
+    form.set('status', status);
     const res = await this.post(`/execution-create-${projectId}.html`, form);
     const parsed = parseFormResponse(res, 'execution-create');
     if (!parsed.ok) return parsed;
@@ -1368,6 +1369,10 @@ export class ZenTaoClient {
         .filter((execution) => execution.name === name)
         .sort((a, b) => (b.id || 0) - (a.id || 0))[0];
       if (match) id = match.id;
+    }
+    if (status === 'doing' && id) {
+      // 有些禅道模板忽略创建表单里的 status，需要再执行一次启动。
+      await this.changeExecutionStatus(id, 'start').catch(() => {});
     }
     return {
       ok: true,
