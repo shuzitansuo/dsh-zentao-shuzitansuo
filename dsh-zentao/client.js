@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.1';
+    const PLUGIN_VERSION = 'v0.2.2';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
@@ -2389,7 +2389,12 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const loadTeamTasks = useCallback(async (fresh = false) => {
+      const loadTeamTasks = async (fresh = false, options = {}) => {
+        const tab = options.tab || teamTab;
+        const filters = options.filters || (tab === 'closed' ? closedFilters : teamFilters);
+        const sort = options.sort || (tab === 'closed' ? closedSort : teamSort);
+        const page = options.page !== undefined ? options.page : tab === 'closed' ? closedPage : teamPage;
+        const pageSize = options.pageSize !== undefined ? options.pageSize : tab === 'closed' ? closedPageSize : teamPageSize;
         if (teamBusyRef.current) return;
         if (fresh && Date.now() - teamFreshAtRef.current < 3000) return;
         if (fresh) teamFreshAtRef.current = Date.now();
@@ -2399,12 +2404,35 @@ window.__ModuleLoader__.load({
         const timer = setTimeout(() => controller.abort(), 20000);
         setTeamTasks((prev) => Object.assign({}, prev, { loading: true, error: '' }));
         try {
-          const res = await api('/zentao/api/team-tasks' + (fresh ? '?fresh=1' : '') + (fresh ? '' : '?t=' + Date.now()), {
-            signal: controller.signal,
+          const params = new URLSearchParams({
+            tab,
+            page: String(page || 1),
+            pageSize: String(pageSize || 20),
+            member: filters.member || '',
+            status: filters.status || '',
+            start: filters.start || '',
+            end: filters.end || '',
+            q: filters.q || '',
+            sort: sort.key,
+            dir: String(sort.dir),
           });
+          if (fresh) params.set('fresh', '1');
+          else params.set('t', String(Date.now()));
+          const res = await api('/zentao/api/team-tasks?' + params.toString(), { signal: controller.signal });
           if (seq !== teamSeqRef.current) return;
           if (!res || !res.ok) throw new Error((res && res.error) || '读取全员任务失败');
-          setTeamTasks({ loading: false, error: '', tasks: res.tasks || [], members: res.members || [], loaded: true });
+          setTeamTasks({
+            loading: false,
+            error: '',
+            rows: res.rows || [],
+            cards: res.cards || [],
+            members: res.members || [],
+            total: res.total || 0,
+            tabCounts: res.tabCounts || { open: 0, closed: 0 },
+            page: res.page || 1,
+            pageCount: res.pageCount || 1,
+            loaded: true,
+          });
         } catch (error) {
           if (seq === teamSeqRef.current) {
             const message = error && error.name === 'AbortError' ? '加载超时，请检查禅道连接' : error.message;
@@ -2414,7 +2442,7 @@ window.__ModuleLoader__.load({
           clearTimeout(timer);
           if (seq === teamSeqRef.current) teamBusyRef.current = false;
         }
-      }, []);
+      };
 
       useEffect(() => {
         if (view === 'team' && !teamTasks.loaded && !teamTasks.loading) loadTeamTasks(true);
@@ -5102,9 +5130,9 @@ window.__ModuleLoader__.load({
         );
 
       const renderTeamHeader = (activeTab, onExport, exporting) => {
-        const allTasks = teamTasks.tasks || [];
-        const openCount = allTasks.filter((item) => item.status !== 'closed').length;
-        const closedCount = allTasks.filter((item) => item.status === 'closed').length;
+        const counts = teamTasks.tabCounts || { open: 0, closed: 0 };
+        const openCount = counts.open || 0;
+        const closedCount = counts.closed || 0;
         return h(
           'div',
           { className: 'zt-team-head' },
@@ -5121,6 +5149,13 @@ window.__ModuleLoader__.load({
                 setTeamTab(key);
                 if (key === 'open') setTeamPage(1);
                 else setClosedPage(1);
+                loadTeamTasks(false, {
+                  tab: key,
+                  page: 1,
+                  filters: key === 'closed' ? closedFilters : teamFilters,
+                  sort: key === 'closed' ? closedSort : teamSort,
+                  pageSize: key === 'closed' ? closedPageSize : teamPageSize,
+                });
               },
             ),
           ),
@@ -5148,50 +5183,22 @@ window.__ModuleLoader__.load({
       };
 
       const renderTeamClosed = () => {
-        const closedTasks = (teamTasks.tasks || []).filter((item) => item.status === 'closed');
-        const q = String(closedFilters.q || '').trim().toLowerCase();
-        const filtered = closedTasks.filter((item) => {
-          if (closedFilters.member === '__unknown__') {
-            if (item.resolverAccount) return false;
-          } else if (closedFilters.member && item.resolverAccount !== closedFilters.member) {
-            return false;
-          }
-          if (closedFilters.start && (!item.resolvedDate || item.resolvedDate < closedFilters.start)) return false;
-          if (closedFilters.end && (!item.resolvedDate || item.resolvedDate > closedFilters.end)) return false;
-          if (q && String(item.title || '').toLowerCase().indexOf(q) < 0) return false;
-          return true;
-        });
-        const sortValue = (item, key) => {
-          if (key === 'id') return Number(item.id) || 0;
-          if (key === 'title') return item.title || '';
-          if (key === 'resolver') return item.resolver || '';
-          if (key === 'resolvedDate') return item.resolvedDate || '';
-          if (key === 'status') return item.statusText || item.status || '';
-          if (key === 'execution') return (item.projectName || '') + ' / ' + (item.executionName || '');
-          return '';
-        };
-        const sorted = filtered.slice().sort((a, b) => {
-          const av = sortValue(a, closedSort.key);
-          const bv = sortValue(b, closedSort.key);
-          const aEmpty = av === '' || av === null || av === undefined;
-          const bEmpty = bv === '' || bv === null || bv === undefined;
-          if (aEmpty && bEmpty) return 0;
-          if (aEmpty) return 1;
-          if (bEmpty) return -1;
-          if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * closedSort.dir;
-          return String(av).localeCompare(String(bv), 'zh-Hans-CN') * closedSort.dir;
-        });
-        const total = sorted.length;
-        const pageCount = Math.max(1, Math.ceil(total / closedPageSize));
-        const page = Math.min(Math.max(1, closedPage), pageCount);
-        const rows = sorted.slice((page - 1) * closedPageSize, page * closedPageSize);
+        const rows = teamTasks.rows || [];
+        const cards = teamTasks.cards || [];
+        const total = teamTasks.total || 0;
+        const page = teamTasks.page || 1;
+        const pageCount = teamTasks.pageCount || 1;
         const patchFilters = (patch) => {
-          setClosedFilters((prev) => Object.assign({}, prev, patch));
+          const next = Object.assign({}, closedFilters, patch);
+          setClosedFilters(next);
           setClosedPage(1);
+          loadTeamTasks(false, { tab: 'closed', filters: next, page: 1, sort: closedSort, pageSize: closedPageSize });
         };
         const toggleSort = (key) => {
-          setClosedSort((prev) => ({ key, dir: prev.key === key ? -prev.dir : 1 }));
+          const next = { key, dir: closedSort.key === key ? -closedSort.dir : 1 };
+          setClosedSort(next);
           setClosedPage(1);
+          loadTeamTasks(false, { tab: 'closed', filters: closedFilters, page: 1, sort: next, pageSize: closedPageSize });
         };
         const closedFractions = () =>
           CLOSED_COLUMNS.map((column) => {
@@ -5274,33 +5281,14 @@ window.__ModuleLoader__.load({
         })();
         const isWeekActive = closedFilters.start === weekRange.start && closedFilters.end === weekRange.end;
         const isMonthActive = closedFilters.start === monthRange.start && closedFilters.end === monthRange.end;
-        const resolverMap = new Map();
-        for (const item of closedTasks) {
-          const key = item.resolverAccount || '__unknown__';
-          if (!resolverMap.has(key)) resolverMap.set(key, { key, label: item.resolver || '未记录解决人', count: 0 });
-          resolverMap.get(key).count += 1;
-        }
-        const cards = [...resolverMap.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'zh-Hans-CN'));
         const exportRows = async () => {
           if (teamExporting) return;
           setTeamExporting(true);
           try {
-            const payload = sorted.map((item) => ({
-              id: item.id,
-              title: item.title,
-              resolver: item.resolver || '',
-              resolvedDate: item.resolvedDate || '',
-              status: item.statusText || item.status || '',
-              execution: (item.projectName ? item.projectName + ' / ' : '') + (item.executionName || ''),
-            }));
             const res = await fetch('/zentao/api/team-tasks/export', {
               method: 'POST',
               headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
-              body: JSON.stringify({
-                rows: payload,
-                headers: ['任务ID', '任务名称', '解决人', '解决时间', '任务状态', '所属迭代'],
-                fields: ['id', 'title', 'resolver', 'resolvedDate', 'status', 'execution'],
-              }),
+              body: JSON.stringify({ tab: 'closed', member: closedFilters.member, start: closedFilters.start, end: closedFilters.end, q: closedFilters.q, sort: closedSort.key, dir: closedSort.dir }),
             });
             if (!res.ok) throw new Error('导出失败（HTTP ' + res.status + '）');
             const blob = await res.blob();
@@ -5447,68 +5435,42 @@ window.__ModuleLoader__.load({
                     ),
                   ),
           ),
-          renderTeamPager({ total, page, pageCount, pageSize: closedPageSize, setPage: setClosedPage, setPageSize: setClosedPageSize }),
+          renderTeamPager({
+            total,
+            page,
+            pageCount,
+            pageSize: closedPageSize,
+            setPage: (next) => {
+              setClosedPage(next);
+              loadTeamTasks(false, { tab: 'closed', filters: closedFilters, page: next, sort: closedSort, pageSize: closedPageSize });
+            },
+            setPageSize: (size) => {
+              setClosedPageSize(size);
+              setClosedPage(1);
+              loadTeamTasks(false, { tab: 'closed', filters: closedFilters, page: 1, sort: closedSort, pageSize: size });
+            },
+          }),
         );
       };
 
       const renderTeamTasks = () => {
         if (teamTab === 'closed') return renderTeamClosed();
-        const tasks = (teamTasks.tasks || []).filter((item) => item.status !== 'closed');
-        const q = String(teamFilters.q || '').trim().toLowerCase();
-        const todayKey = (() => {
-          const now = new Date();
-          return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-        })();
-        const overdueOf = (item) =>
-          !item.done &&
-          !['done', 'closed', 'cancel'].includes(item.status) &&
-          /^\d{4}-\d{2}-\d{2}$/.test(String(item.deadline || '')) &&
-          item.deadline < todayKey;
-        const filtered = tasks.filter((item) => {
-          if (teamFilters.member && item.assignedToAccount !== teamFilters.member) return false;
-          if (teamFilters.status === '__todo__') {
-            if (item.status !== 'wait' && item.status !== 'doing') return false;
-          } else if (teamFilters.status === '__done__') {
-            if (item.status !== 'done') return false;
-          } else if (teamFilters.status && item.status !== teamFilters.status) {
-            return false;
-          }
-          if (teamFilters.start && (!item.deadline || item.deadline < teamFilters.start)) return false;
-          if (teamFilters.end && (!item.deadline || item.deadline > teamFilters.end)) return false;
-          if (q && String(item.title || '').toLowerCase().indexOf(q) < 0) return false;
-          return true;
-        });
-        const sortValue = (item, key) => {
-          if (key === 'id') return Number(item.id) || 0;
-          if (key === 'overdue') return overdueOf(item) ? 1 : 0;
-          if (key === 'execution') return (item.projectName || '') + ' / ' + (item.executionName || '');
-          if (key === 'deadline') return item.deadline || '';
-          if (key === 'assignee') return item.assignedTo || '';
-          if (key === 'status') return item.statusText || item.status || '';
-          return item.title || '';
-        };
-        const sorted = filtered.slice().sort((a, b) => {
-          const av = sortValue(a, teamSort.key);
-          const bv = sortValue(b, teamSort.key);
-          const aEmpty = av === '' || av === null || av === undefined;
-          const bEmpty = bv === '' || bv === null || bv === undefined;
-          if (aEmpty && bEmpty) return 0;
-          if (aEmpty) return 1;
-          if (bEmpty) return -1;
-          if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * teamSort.dir;
-          return String(av).localeCompare(String(bv), 'zh-Hans-CN') * teamSort.dir;
-        });
-        const total = sorted.length;
-        const pageCount = Math.max(1, Math.ceil(total / teamPageSize));
-        const page = Math.min(Math.max(1, teamPage), pageCount);
-        const rows = sorted.slice((page - 1) * teamPageSize, page * teamPageSize);
+        const rows = teamTasks.rows || [];
+        const cards = teamTasks.cards || [];
+        const total = teamTasks.total || 0;
+        const page = teamTasks.page || 1;
+        const pageCount = teamTasks.pageCount || 1;
         const patchFilters = (patch) => {
-          setTeamFilters((prev) => Object.assign({}, prev, patch));
+          const next = Object.assign({}, teamFilters, patch);
+          setTeamFilters(next);
           setTeamPage(1);
+          loadTeamTasks(false, { tab: 'open', filters: next, page: 1, sort: teamSort, pageSize: teamPageSize });
         };
         const toggleSort = (key) => {
-          setTeamSort((prev) => ({ key, dir: prev.key === key ? -prev.dir : 1 }));
+          const next = { key, dir: teamSort.key === key ? -teamSort.dir : 1 };
+          setTeamSort(next);
           setTeamPage(1);
+          loadTeamTasks(false, { tab: 'open', filters: teamFilters, page: 1, sort: next, pageSize: teamPageSize });
         };
         const teamFractions = () =>
           TEAM_COLUMNS.map((column) => {
@@ -5525,11 +5487,10 @@ window.__ModuleLoader__.load({
           const index = TEAM_COLUMNS.findIndex((column) => column.key === key);
           if (index < 0) return;
           const move = (ev) => {
-            const delta = (ev.clientX - startX) / Math.max(1, tableWidth);
             const next = startFractions.slice();
             const min = Math.max(0.05, (TEAM_COLUMNS[index].min || 56) / Math.max(1, tableWidth));
-            const max = 0.6;
-            let target = Math.min(max, Math.max(min, startFractions[index] + delta));
+            const delta = (ev.clientX - startX) / Math.max(1, tableWidth);
+            let target = Math.min(0.6, Math.max(min, startFractions[index] + delta));
             const neighbor = index + 1 < next.length ? index + 1 : index - 1;
             if (neighbor < 0) return;
             let rest = next[neighbor] - (target - startFractions[index]);
@@ -5592,32 +5553,21 @@ window.__ModuleLoader__.load({
         })();
         const isWeekActive = teamFilters.start === weekRange.start && teamFilters.end === weekRange.end;
         const isMonthActive = teamFilters.start === monthRange.start && teamFilters.end === monthRange.end;
-        const setThisWeek = () => patchFilters({ start: weekRange.start, end: weekRange.end });
-        const setThisMonth = () => patchFilters({ start: monthRange.start, end: monthRange.end });
         const exportRows = async () => {
           if (teamExporting) return;
           setTeamExporting(true);
           try {
-            const payload = sorted.map((item) => ({
-              id: item.id,
-              title: item.title,
-              assignee: item.assignedTo || '',
-              status: item.statusText || item.status || '',
-              deadline: item.deadline || '',
-              overdue: overdueOf(item),
-              execution: (item.projectName ? item.projectName + ' / ' : '') + (item.executionName || ''),
-            }));
             const res = await fetch('/zentao/api/team-tasks/export', {
               method: 'POST',
               headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
-              body: JSON.stringify({ rows: payload }),
+              body: JSON.stringify({ tab: 'open', member: teamFilters.member, status: teamFilters.status, start: teamFilters.start, end: teamFilters.end, q: teamFilters.q, sort: teamSort.key, dir: teamSort.dir }),
             });
             if (!res.ok) throw new Error('导出失败（HTTP ' + res.status + '）');
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'team-tasks-' + todayKey + '.xlsx';
+            a.download = 'team-tasks-' + isoDate(new Date()) + '.xlsx';
             document.body.appendChild(a);
             a.click();
             a.remove();
@@ -5628,24 +5578,6 @@ window.__ModuleLoader__.load({
             setTeamExporting(false);
           }
         };
-        const chartTasks = tasks.filter((item) => {
-          if (teamFilters.member && item.assignedToAccount !== teamFilters.member) return false;
-          if (teamFilters.start && (!item.deadline || item.deadline < teamFilters.start)) return false;
-          if (teamFilters.end && (!item.deadline || item.deadline > teamFilters.end)) return false;
-          return true;
-        });
-        const chartMembers = new Map();
-        for (const item of chartTasks) {
-          const key = item.assignedToAccount || item.assignedTo || '未指派';
-          const label = item.assignedTo || item.assignedToAccount || '未指派';
-          if (!chartMembers.has(key)) chartMembers.set(key, { key, label, todo: 0, finished: 0 });
-          const entry = chartMembers.get(key);
-          if (item.status === 'wait' || item.status === 'doing') entry.todo += 1;
-          else if (item.status === 'done') entry.finished += 1;
-        }
-        const chartData = [...chartMembers.values()]
-          .filter((entry) => entry.todo || entry.finished)
-          .sort((a, b) => b.todo + b.finished - (a.todo + a.finished) || a.label.localeCompare(b.label, 'zh-Hans-CN'));
         return h(
           'div',
           { className: 'zt-team' },
@@ -5659,11 +5591,11 @@ window.__ModuleLoader__.load({
               h('span', { className: 'zt-team-overview-title' }, '任务总览'),
               h('span', { className: 'zt-team-overview-hint' }, '按截止完成时间 / 成员筛选 · 不含已关闭任务'),
             ),
-            chartData.length
+            cards.length
               ? h(
                   'div',
                   { className: 'zt-team-cards' },
-                  chartData.map((entry) =>
+                  cards.map((entry) =>
                     h(
                       'div',
                       { key: entry.key, className: 'zt-team-card' },
@@ -5713,15 +5645,13 @@ window.__ModuleLoader__.load({
               ariaStart: '截止完成时间开始',
               ariaEnd: '截止完成时间结束',
             }),
-            h('button', { className: 'zt-chip-btn' + (isWeekActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: setThisWeek }, '本周'),
-            h('button', { className: 'zt-chip-btn' + (isMonthActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: setThisMonth }, '本月'),
+            h('button', { className: 'zt-chip-btn' + (isWeekActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: () => patchFilters({ start: weekRange.start, end: weekRange.end }) }, '本周'),
+            h('button', { className: 'zt-chip-btn' + (isMonthActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: () => patchFilters({ start: monthRange.start, end: monthRange.end }) }, '本月'),
             h(
               'select',
               { className: 'zt-team-input zt-team-select', value: teamFilters.member, onChange: (event) => patchFilters({ member: event.target.value }) },
               h('option', { value: '' }, '全部成员'),
-              (teamTasks.members || []).map((member) =>
-                h('option', { key: member.account || member.label, value: member.account || member.label }, member.label),
-              ),
+              (teamTasks.members || []).map((member) => h('option', { key: member.account || member.label, value: member.account || member.label }, member.label)),
             ),
             h(
               'select',
@@ -5730,7 +5660,7 @@ window.__ModuleLoader__.load({
               h('option', { value: '__todo__' }, '待完成（未开始/进行中）'),
               h('option', { value: '__done__' }, '已完成'),
               ['wait', 'doing', 'done', 'pause', 'cancel'].map((key) =>
-                h('option', { key, value: key }, { wait: '未开始', doing: '进行中', done: '已完成', pause: '已暂停', cancel: '已取消', closed: '已关闭' }[key]),
+                h('option', { key, value: key }, { wait: '未开始', doing: '进行中', done: '已完成', pause: '已暂停', cancel: '已取消' }[key]),
               ),
             ),
             h('input', {
@@ -5741,7 +5671,6 @@ window.__ModuleLoader__.load({
             }),
             h('button', { className: 'zt-chip-btn', type: 'button', onClick: () => patchFilters({ member: '', status: '', start: '', end: '', q: '' }) }, '清除筛选'),
           ),
-          teamTasks.error ? h('div', { className: 'zt-team-error' }, teamTasks.error) : null,
           h(
             'div',
             { className: 'zt-team-body' },
@@ -5786,29 +5715,23 @@ window.__ModuleLoader__.load({
                       'tbody',
                       null,
                       rows.map((item) => {
-                        const overdue = overdueOf(item);
+                        const overdue =
+                          !item.done &&
+                          !['done', 'closed', 'cancel'].includes(item.status) &&
+                          /^\d{4}-\d{2}-\d{2}$/.test(String(item.deadline || '')) &&
+                          item.deadline < new Date().toISOString().slice(0, 10);
                         return h(
                           'tr',
-                          { key: item.id, className: overdue ? 'zt-team-row-overdue' : '' },
+                          { key: item.id },
                           h('td', { className: 'zt-team-col-id' }, String(item.id)),
                           h(
                             'td',
-                            { className: 'zt-team-col-title' + (overdue ? ' zt-title-overdue' : '') },
-                            h(
-                              'a',
-                              { href: baseUrl + item.url, target: '_blank', rel: 'noreferrer noopener', title: '在禅道打开任务' },
-                              item.title || '（无标题）',
-                            ),
+                            { className: 'zt-team-col-title' },
+                            h('a', { href: baseUrl + item.url, target: '_blank', rel: 'noreferrer noopener' }, item.title || '（无标题）'),
                           ),
                           h('td', null, item.assignedTo || '—'),
                           h('td', null, h('span', { className: 'zt-tag zt-tag-' + statusTone(item.status) }, item.statusText || item.status || '—')),
-                          h(
-                            'td',
-                            null,
-                            item.deadline
-                              ? h('span', { className: 'zt-team-date-value' + (overdue ? ' zt-team-date-overdue' : '') }, shortListDate(item.deadline))
-                              : '—',
-                          ),
+                          h('td', null, item.deadline ? h('span', { className: 'zt-team-date-value' + (overdue ? ' zt-team-date-overdue' : '') }, shortListDate(item.deadline)) : '—'),
                           h('td', null, overdue ? h('span', { className: 'zt-team-overdue-text' }, '延期') : '-'),
                           h('td', { className: 'zt-team-col-exec' }, (item.projectName ? item.projectName + ' / ' : '') + (item.executionName || '—')),
                         );
@@ -5816,7 +5739,21 @@ window.__ModuleLoader__.load({
                     ),
                   ),
           ),
-          renderTeamPager({ total, page, pageCount, pageSize: teamPageSize, setPage: setTeamPage, setPageSize: setTeamPageSize }),
+          renderTeamPager({
+            total,
+            page,
+            pageCount,
+            pageSize: teamPageSize,
+            setPage: (next) => {
+              setTeamPage(next);
+              loadTeamTasks(false, { tab: 'open', filters: teamFilters, page: next, sort: teamSort, pageSize: teamPageSize });
+            },
+            setPageSize: (size) => {
+              setTeamPageSize(size);
+              setTeamPage(1);
+              loadTeamTasks(false, { tab: 'open', filters: teamFilters, page: 1, sort: teamSort, pageSize: size });
+            },
+          }),
         );
       };
 
@@ -8253,8 +8190,8 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-table-team tbody tr{cursor:default}
 .zt-team-pager .zt-chip-btn{height:26px;padding:0 10px;font-size:12px}
 .zt-team-pager .zt-chip-btn:disabled{opacity:.45;cursor:default;color:var(--td-text-color-placeholder);border-color:var(--td-component-stroke)}
-.zt-team-row-overdue .zt-team-date-value{display:inline-block;padding:1px 6px;border-radius:4px}
-.zt-team-date-overdue{background:#e34d59;color:#fff;font-weight:600}
+.zt-team-row-overdue .zt-team-date-value{display:inline-block}
+.zt-team-date-overdue{display:inline-block;padding:2px 8px;border-radius:4px;background:#e34d59;color:#fff;font-weight:600;line-height:18px}
 .zt-team-overdue-text{color:#e34d59;font-weight:600}
 .zt-team-pager{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;padding:10px 16px 12px;border-top:1px solid var(--td-component-stroke);font-size:12px;color:var(--td-text-color-secondary)}
 .zt-team-pager-right{display:flex;align-items:center;gap:6px;flex:0 0 auto}

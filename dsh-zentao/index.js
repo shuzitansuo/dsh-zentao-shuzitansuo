@@ -58,6 +58,109 @@ const STATUS_OPTIONS = {
   ],
 };
 
+function filterTeamTasks(data, query = {}) {
+  const tasks = Array.isArray(data && data.tasks) ? data.tasks : [];
+  const tab = query.tab === 'closed' ? 'closed' : 'open';
+  const isClosedTab = tab === 'closed';
+  const pageSize = Math.min(500, Math.max(1, Number(query.pageSize) || 20));
+  const page = Math.max(1, Number(query.page) || 1);
+  const member = String(query.member || '');
+  const status = String(query.status || '');
+  const start = String(query.start || '');
+  const end = String(query.end || '');
+  const q = String(query.q || '').trim().toLowerCase();
+  const sortKey = String(query.sort || (isClosedTab ? 'resolvedDate' : 'deadline'));
+  const dir = Number(query.dir) === -1 ? -1 : 1;
+  const dateOf = (item) => (isClosedTab ? item.resolvedDate : item.deadline) || '';
+  const accountOf = (item) => (isClosedTab ? item.resolverAccount : item.assignedToAccount) || '';
+  const nameOf = (item) => (isClosedTab ? item.resolver : item.assignedTo) || '';
+  const today = new Date().toISOString().slice(0, 10);
+  const overdueOf = (item) =>
+    !item.done &&
+    !['done', 'closed', 'cancel'].includes(item.status) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(String(item.deadline || '')) &&
+    item.deadline < today;
+
+  const base = tasks.filter((item) => {
+    if (isClosedTab ? item.status !== 'closed' : item.status === 'closed') return false;
+    if (member === '__unknown__') {
+      if (accountOf(item)) return false;
+    } else if (member && accountOf(item) !== member) return false;
+    if (start && (!dateOf(item) || dateOf(item) < start)) return false;
+    if (end && (!dateOf(item) || dateOf(item) > end)) return false;
+    return true;
+  });
+
+  const cardsMap = new Map();
+  for (const item of base) {
+    const key = accountOf(item) || '__unknown__';
+    const label = nameOf(item) || '未记录';
+    if (!cardsMap.has(key)) cardsMap.set(key, { key, label, todo: 0, finished: 0, count: 0 });
+    const entry = cardsMap.get(key);
+    if (isClosedTab) entry.count += 1;
+    else if (item.status === 'wait' || item.status === 'doing') entry.todo += 1;
+    else if (item.status === 'done') entry.finished += 1;
+  }
+  const cards = [...cardsMap.values()]
+    .filter((entry) => (isClosedTab ? entry.count : entry.todo + entry.finished))
+    .sort((a, b) => {
+      const av = isClosedTab ? a.count : a.todo + a.finished;
+      const bv = isClosedTab ? b.count : b.todo + b.finished;
+      return bv - av || a.label.localeCompare(b.label, 'zh-Hans-CN');
+    });
+
+  let list = base;
+  if (!isClosedTab && status) {
+    if (status === '__todo__') list = list.filter((item) => item.status === 'wait' || item.status === 'doing');
+    else if (status === '__done__') list = list.filter((item) => item.status === 'done');
+    else list = list.filter((item) => item.status === status);
+  }
+  if (q) list = list.filter((item) => String(item.title || '').toLowerCase().indexOf(q) >= 0);
+
+  const sortValue = (item) => {
+    if (sortKey === 'id') return Number(item.id) || 0;
+    if (sortKey === 'title') return item.title || '';
+    if (sortKey === 'assignee') return item.assignedTo || '';
+    if (sortKey === 'resolver') return item.resolver || '';
+    if (sortKey === 'status') return item.statusText || item.status || '';
+    if (sortKey === 'deadline') return item.deadline || '';
+    if (sortKey === 'resolvedDate') return item.resolvedDate || '';
+    if (sortKey === 'overdue') return overdueOf(item) ? 1 : 0;
+    if (sortKey === 'execution') return (item.projectName || '') + ' / ' + (item.executionName || '');
+    return item.title || '';
+  };
+  list = list.slice().sort((a, b) => {
+    const av = sortValue(a);
+    const bv = sortValue(b);
+    const aEmpty = av === '' || av === null || av === undefined;
+    const bEmpty = bv === '' || bv === null || bv === undefined;
+    if (aEmpty && bEmpty) return 0;
+    if (aEmpty) return 1;
+    if (bEmpty) return -1;
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+    return String(av).localeCompare(String(bv), 'zh-Hans-CN') * dir;
+  });
+
+  const total = list.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const rows = list.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const openCount = tasks.filter((item) => item.status !== 'closed').length;
+  const closedCount = tasks.filter((item) => item.status === 'closed').length;
+  return {
+    tab,
+    page: safePage,
+    pageSize,
+    pageCount,
+    total,
+    rows,
+    cards,
+    members: Array.isArray(data && data.members) ? data.members : [],
+    tabCounts: { open: openCount, closed: closedCount },
+    updatedAt: data && data.updatedAt,
+  };
+}
+
 export function apply(ctx, config = {}) {
   // User-editable overrides live in ~/.dsh/zentao/workbench-settings.json so
   // the settings dialog can change credentials/model without a restart.
@@ -415,7 +518,8 @@ export function apply(ctx, config = {}) {
           ? await client.teamTasks()
           : await cached('team-tasks', 3 * 60 * 1000, () => client.teamTasks());
         if (fresh) cache.set('team-tasks', { at: Date.now(), value: data });
-        return json(res, 200, { ok: true, tasks: data.tasks, members: data.members, updatedAt: data.updatedAt });
+        const query = Object.fromEntries(url.searchParams.entries());
+        return json(res, 200, Object.assign({ ok: true }, filterTeamTasks(data, query)));
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });
       }
@@ -424,9 +528,33 @@ export function apply(ctx, config = {}) {
     if (method === 'POST' && path === 'team-tasks/export') {
       try {
         const body = JSON.parse((await readBody(req, 20 * 1024 * 1024)) || '{}');
-        const rows = Array.isArray(body.rows) ? body.rows : [];
-        const buffer = buildTeamTasksXlsx(rows, body.headers, body.fields);
-        const name = 'team-tasks-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+        const data = await cached('team-tasks', 3 * 60 * 1000, () => client.teamTasks());
+        const view = filterTeamTasks(data, Object.assign({}, body, { page: 1, pageSize: 100000 }));
+        const closed = view.tab === 'closed';
+        const headers = closed
+          ? ['任务ID', '任务名称', '解决人', '解决时间', '任务状态', '所属迭代']
+          : ['ID', '任务名称', '指派人', '状态', '截止完成时间', '是否延期', '所属迭代'];
+        const fields = closed
+          ? ['id', 'title', 'resolver', 'resolvedDate', 'status', 'execution']
+          : ['id', 'title', 'assignee', 'status', 'deadline', 'overdue', 'execution'];
+        const rows = view.rows.map((item) => ({
+          id: item.id,
+          title: item.title,
+          assignee: item.assignedTo || '',
+          resolver: item.resolver || '',
+          status: item.statusText || item.status || '',
+          deadline: item.deadline || '',
+          resolvedDate: item.resolvedDate || '',
+          overdue: !closed
+            ? !item.done &&
+              !['done', 'closed', 'cancel'].includes(item.status) &&
+              /^\d{4}-\d{2}-\d{2}$/.test(String(item.deadline || '')) &&
+              item.deadline < new Date().toISOString().slice(0, 10)
+            : false,
+          execution: (item.projectName ? item.projectName + ' / ' : '') + (item.executionName || ''),
+        }));
+        const buffer = buildTeamTasksXlsx(rows, headers, fields);
+        const name = (closed ? 'team-closed-tasks-' : 'team-tasks-') + new Date().toISOString().slice(0, 10) + '.xlsx';
         res.writeHead(200, {
           'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
           'content-disposition': 'attachment; filename="' + name + '"',

@@ -1,5 +1,5 @@
 {
-  "version": "0.2.1",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.1.zip",
-  "notes": "全员任务顶部可拖拽；进入插件预加载仪表盘与日历任务"
+  "version": "0.2.2",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.2.zip",
+  "notes": "全员任务服务端分页/筛选/排序、导出；逾期日期样式对齐任务列表；预加载仪表盘/日历"
 }
