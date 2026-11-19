@@ -9,9 +9,10 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.3';
+    const PLUGIN_VERSION = 'v0.2.4';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
+    const LEFT_MIN_WIDTH = 360;
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
 
     let seq = 0;
@@ -149,7 +150,7 @@ window.__ModuleLoader__.load({
     }
 
     function loadLayout() {
-      const fallback = { leftOpen: true, rightOpen: true, leftW: 350, rightW: 420 };
+      const fallback = { leftOpen: true, rightOpen: true, leftW: LEFT_MIN_WIDTH, rightW: 420 };
       const viewport = typeof window !== 'undefined' ? window.innerWidth || 1280 : 1280;
       // Leave at least a usable dashboard/calendar column in the current viewport.
       const MIN_MIDDLE = 680;
@@ -160,16 +161,16 @@ window.__ModuleLoader__.load({
           return {
             leftOpen: true,
             rightOpen: true,
-            leftW: Math.min(fallback.leftW, Math.max(200, budget - 380)),
+            leftW: Math.min(fallback.leftW, Math.max(LEFT_MIN_WIDTH, budget - 380)),
             rightW: Math.min(fallback.rightW, Math.max(280, budget - 300)),
           };
         }
-        let leftW = clamp(Number(saved.leftW) || fallback.leftW, 200, 560);
+        let leftW = clamp(Number(saved.leftW) || fallback.leftW, LEFT_MIN_WIDTH, 560);
         let rightW = clamp(Number(saved.rightW) || fallback.rightW, 280, 640);
         if (leftW + rightW > budget) {
           const over = leftW + rightW - budget;
           rightW = Math.max(260, rightW - over);
-          if (leftW + rightW > budget) leftW = Math.max(200, leftW - (leftW + rightW - budget));
+          if (leftW + rightW > budget) leftW = Math.max(LEFT_MIN_WIDTH, leftW - (leftW + rightW - budget));
         }
         return {
           leftOpen: saved.leftOpen !== false,
@@ -1239,7 +1240,7 @@ window.__ModuleLoader__.load({
             const railLeft = prev.leftOpen ? 0 : 40;
             const railRight = prev.rightOpen ? 0 : 40;
             const middleMin = 560;
-            let leftW = prev.leftOpen ? clamp(prev.leftW, 200, 560) : prev.leftW;
+            let leftW = prev.leftOpen ? clamp(prev.leftW, LEFT_MIN_WIDTH, 560) : prev.leftW;
             let rightW = prev.rightOpen ? clamp(prev.rightW, 260, 640) : prev.rightW;
             const budget = avail - railLeft - railRight - middleMin;
             if (prev.leftOpen && prev.rightOpen && leftW + rightW > budget) {
@@ -1247,9 +1248,9 @@ window.__ModuleLoader__.load({
               const shrinkRight = Math.min(over, Math.max(0, rightW - 260));
               rightW -= shrinkRight;
               const rest = over - shrinkRight;
-              if (rest > 0) leftW = Math.max(200, leftW - rest);
+              if (rest > 0) leftW = Math.max(LEFT_MIN_WIDTH, leftW - rest);
             } else if (prev.leftOpen && !prev.rightOpen && leftW > budget) {
-              leftW = Math.max(200, budget);
+              leftW = Math.max(LEFT_MIN_WIDTH, budget);
             } else if (!prev.leftOpen && prev.rightOpen && rightW > budget) {
               rightW = Math.max(260, budget);
             }
@@ -2469,7 +2470,7 @@ window.__ModuleLoader__.load({
           else params.set('t', String(Date.now()));
           const res = await api('/zentao/api/team-tasks?' + params.toString(), { signal: controller.signal });
           if (seq !== teamSeqRef.current) return;
-          if (!res || !res.ok) throw new Error((res && res.error) || '读取全员任务失败');
+          if (!res || !res.ok) throw new Error((res && res.error) || '读取任务失败');
           setTeamTasks({
             loading: false,
             error: '',
@@ -3017,7 +3018,7 @@ window.__ModuleLoader__.load({
             // 中间列保底 560px：列表/仪表盘不会被拖拽挤没
             const splitters = 16; // 左右两条拖拽分隔条
             const limit = Math.max(side === 'left' ? 200 : 260, width - other - 560 - splitters);
-            if (side === 'left') return Object.assign({}, prev, { leftW: clamp(next, 200, Math.min(560, limit)) });
+            if (side === 'left') return Object.assign({}, prev, { leftW: clamp(next, LEFT_MIN_WIDTH, Math.min(560, limit)) });
             return Object.assign({}, prev, { rightW: clamp(next, 260, Math.min(640, limit)) });
           });
         };
@@ -3853,6 +3854,7 @@ window.__ModuleLoader__.load({
         }
         if (editor.field === 'module') return String(editor.item.moduleName || '未指定模块');
         if (editor.field === 'priority') return editor.item.priority ? 'P' + editor.item.priority : '';
+        if (editor.field === 'execution') return String(editor.item.executionName || '');
         return editor.item.type === 'bug'
           ? editor.item.resolution || editor.item.statusText
           : editor.item.stage || editor.item.statusText;
@@ -3911,6 +3913,24 @@ window.__ModuleLoader__.load({
                 prev && prev.item === item && prev.field === field
                   ? Object.assign({}, prev, {
                       options: options.map((option) => ({ value: option.key, label: option.label })),
+                      loading: false,
+                    })
+                  : prev,
+              );
+            })
+            .catch((error) => fail(error.message));
+          return;
+        }
+        if (item.type === 'task' && field === 'execution') {
+          api('/zentao/api/task-execution-options?id=' + item.id)
+            .then((data) => {
+              if (!data || !data.ok) throw new Error((data && data.error) || '读取所属迭代失败');
+              const options = data.options || [];
+              if (!options.length) throw new Error('没有可移动的迭代');
+              setCellEditor((prev) =>
+                prev && prev.item === item && prev.field === field
+                  ? Object.assign({}, prev, {
+                      options: options.map((option) => ({ value: option.value, label: option.label })),
                       loading: false,
                     })
                   : prev,
@@ -4042,6 +4062,13 @@ window.__ModuleLoader__.load({
               body: JSON.stringify({ id: editor.item.id, statusKey: option.value }),
             });
             if (!result.ok) throw new Error(result.error || '任务状态修改失败');
+          } else if (editor.field === 'execution' && editor.item.type === 'task') {
+            result = await api('/zentao/api/task-execution', {
+              method: 'POST',
+              headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+              body: JSON.stringify({ id: editor.item.id, executionId: Number(option.value) }),
+            });
+            if (!result.ok) throw new Error(result.error || '所属迭代修改失败');
           } else if (editor.field === 'assignee' && editor.item.type === 'task') {
             result = await api('/zentao/api/task-assignee', {
               method: 'POST',
@@ -4073,6 +4100,10 @@ window.__ModuleLoader__.load({
           }
           setCellEditor(null);
           if (selection.executionId) await loadItems(selection.executionId, true);
+          if (view === 'team') {
+            teamFreshAtRef.current = 0;
+            await loadTeamTasks(true, { tab: 'open', filters: teamFilters, sort: teamSort, page: teamPage, pageSize: teamPageSize });
+          }
         } catch (error) {
           setCellEditor(null);
           setActionError(error.message);
@@ -4097,6 +4128,10 @@ window.__ModuleLoader__.load({
           if (!result.ok) throw new Error(result.error || '截止日期修改失败');
           setCellEditor(null);
           if (selection.executionId) await loadItems(selection.executionId, true);
+          if (view === 'team') {
+            teamFreshAtRef.current = 0;
+            await loadTeamTasks(true, { tab: 'open', filters: teamFilters, sort: teamSort, page: teamPage, pageSize: teamPageSize });
+          }
         } catch (error) {
           setCellEditor(null);
           setActionError(error.message);
@@ -5782,11 +5817,27 @@ window.__ModuleLoader__.load({
                             { className: 'zt-team-col-title' },
                             h('a', { href: baseUrl + item.url, target: '_blank', rel: 'noreferrer noopener' }, item.title || '（无标题）'),
                           ),
-                          h('td', null, item.assignedTo || '—'),
-                          h('td', null, h('span', { className: 'zt-tag zt-tag-' + statusTone(item.status) }, item.statusText || item.status || '—')),
-                          h('td', null, item.deadline ? h('span', { className: 'zt-team-date-value' + (overdue ? ' zt-team-date-overdue' : '') }, shortListDate(item.deadline)) : '—'),
+                          h(
+                            'td',
+                            { className: 'zt-cell-editable', title: '点击修改指派人', onClick: (event) => openCellEditor(item, 'assignee', event) },
+                            item.assignedTo || '—',
+                          ),
+                          h(
+                            'td',
+                            { className: 'zt-cell-editable', title: '点击修改状态', onClick: (event) => openCellEditor(item, 'status', event) },
+                            h('span', { className: 'zt-tag zt-tag-' + statusTone(item.status) }, item.statusText || item.status || '—'),
+                          ),
+                          h(
+                            'td',
+                            { className: 'zt-cell-editable', title: '点击修改截止日期', onClick: (event) => openCellEditor(item, 'deadline', event) },
+                            item.deadline ? h('span', { className: 'zt-team-date-value' + (overdue ? ' zt-team-date-overdue' : '') }, shortListDate(item.deadline)) : '—',
+                          ),
                           h('td', null, overdue ? h('span', { className: 'zt-team-overdue-text' }, '延期') : '-'),
-                          h('td', { className: 'zt-team-col-exec' }, (item.projectName ? item.projectName + ' / ' : '') + (item.executionName || '—')),
+                          h(
+                            'td',
+                            { className: 'zt-team-col-exec zt-cell-editable', title: '点击修改所属迭代', onClick: (event) => openCellEditor(item, 'execution', event) },
+                            (item.projectName ? item.projectName + ' / ' : '') + (item.executionName || '—'),
+                          ),
                         );
                       }),
                     ),
@@ -5839,6 +5890,8 @@ window.__ModuleLoader__.load({
                 ? '修改模块'
                 : cellEditor.field === 'deadline'
                   ? '修改截止日期'
+                  : cellEditor.field === 'execution'
+                    ? '修改所属迭代'
                   : cellEditor.field === 'status' || cellEditor.field === 'storyStatus'
                     ? cellEditor.item.type === 'bug'
                       ? '修改方案'
@@ -5915,7 +5968,7 @@ window.__ModuleLoader__.load({
             'zt-root' +
             (isMac ? ' zt-mac' : '') +
             (lightsPad > 0 ? ' zt-under-lights' : '') +
-            (layout.leftOpen ? '' : ' zt-left-closed'),
+            (layout.leftOpen ? ' zt-left-open' : ' zt-left-closed'),
           ref: rootRef,
         },
         h('style', { key: 'zt-style' }, CSS),
@@ -6480,7 +6533,7 @@ window.__ModuleLoader__.load({
                         className: 'zt-view-btn' + (view === 'list' ? ' zt-view-btn-active' : ''),
                         onClick: () => switchView('list'),
                       },
-                      '列表',
+                      '项目',
                     ),
                     h(
                       'button',
@@ -6491,19 +6544,8 @@ window.__ModuleLoader__.load({
                         className: 'zt-view-btn' + (view === 'team' ? ' zt-view-btn-active' : ''),
                         onClick: () => switchView('team'),
                       },
-                      '全员任务',
+                      '任务',
                     ),
-                  ),
-                  h(
-                    'button',
-                    {
-                      className: 'zt-icon-btn' + (treeBusy ? ' zt-spinning' : ''),
-                      title: treeBusy ? '刷新中…' : '刷新项目/迭代',
-                      'aria-label': '刷新项目/迭代',
-                      disabled: treeBusy,
-                      onClick: refreshAll,
-                    },
-                    h(GlyphIcon, { name: 'refresh', size: 16 }),
                   ),
                   h(
                     'button',
@@ -6557,6 +6599,17 @@ window.__ModuleLoader__.load({
                             onClick: () => setSearchOpen(true),
                           },
                           h(GlyphIcon, { name: 'search', size: 16 }),
+                        ),
+                        h(
+                          'button',
+                          {
+                            className: 'zt-icon-btn' + (treeBusy ? ' zt-spinning' : ''),
+                            title: treeBusy ? '刷新中…' : '刷新项目/迭代',
+                            'aria-label': '刷新项目/迭代',
+                            disabled: treeBusy,
+                            onClick: refreshAll,
+                          },
+                          h(GlyphIcon, { name: 'refresh', size: 16 }),
                         ),
                         h(
                           'button',
@@ -8069,13 +8122,14 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-split{flex:0 0 8px;width:8px;cursor:col-resize;background:transparent;position:relative;z-index:2}
 .zt-split:after{content:'';position:absolute;left:50%;top:0;bottom:0;width:1px;margin-left:-0.5px;background:var(--td-component-stroke)}
 .zt-split:hover:after,.zt-split:active:after{background:var(--td-brand-color);width:2px;margin-left:-1px}
-.zt-rail{flex:0 0 40px;width:40px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:8px 4px 0;background:var(--td-bg-color-container);user-select:none}
+.zt-rail{flex:0 0 40px;width:40px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 4px;background:var(--td-bg-color-container);user-select:none}
 .zt-rail-left{border-right:1px solid var(--td-component-stroke)}
 .zt-rail-right{border-left:1px solid var(--td-component-stroke)}
 /* macOS overlay title bar: keep the collapsed rail clear of the traffic lights. */
-.zt-mac .zt-rail{padding-top:38px}
+.zt-mac .zt-rail{padding-top:0}
 .zt-under-lights .zt-left .zt-pane-head{padding-left:var(--zt-pane-head-pad,16px)}
 .zt-under-lights.zt-left-closed .zt-main-head{padding-left:var(--zt-main-head-pad,16px)}
+.zt-root.zt-left-closed .zt-main-head .zt-tabs,.zt-root.zt-left-closed .zt-team-head .zt-tabs{margin-left:100px}
 .zt-pane-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px 0 16px;border-bottom:1px solid var(--td-component-stroke);height:48px;min-height:48px;min-width:0;-webkit-app-region:drag}
 .zt-pane-title{font:var(--td-font-title-small);color:var(--td-text-color-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;transition:max-width .22s cubic-bezier(.4,0,.2,1),opacity .12s linear}
 .zt-head-actions{display:flex;align-items:center;gap:4px;margin-left:auto;-webkit-app-region:no-drag}
@@ -8238,6 +8292,8 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-table-team .zt-team-col-title a{color:var(--td-text-color-primary);text-decoration:none}
 .zt-table-team .zt-team-col-title a:hover{color:var(--td-text-color-brand);text-decoration:underline}
 .zt-table-team tbody tr{cursor:default}
+.zt-table-team td.zt-cell-editable{cursor:pointer}
+.zt-table-team td.zt-cell-editable:hover{background:var(--td-bg-color-container-hover)}
 .zt-team-pager .zt-chip-btn{height:26px;padding:0 10px;font-size:12px}
 .zt-team-pager .zt-chip-btn:disabled{opacity:.45;cursor:default;color:var(--td-text-color-placeholder);border-color:var(--td-component-stroke)}
 .zt-team-row-overdue .zt-team-date-value{display:inline-block}

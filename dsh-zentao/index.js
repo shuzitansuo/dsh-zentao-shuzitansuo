@@ -235,6 +235,10 @@ export function apply(ctx, config = {}) {
   const invalidate = (prefix) => {
     for (const key of [...cache.keys()]) if (key.startsWith(prefix)) cache.delete(key);
   };
+  const invalidateTeamTasks = () => {
+    invalidate('team-tasks');
+    for (const key of [...client.taskCache.keys()]) if (String(key).startsWith('team-exec:')) client.taskCache.delete(key);
+  };
 
   // Warm the dashboard cache in the background so opening the app doesn't wait
   // for the full aggregation on every start (read-only, ~20 GET requests).
@@ -605,6 +609,7 @@ export function apply(ctx, config = {}) {
         invalidate('dashboard');
         invalidate('my-tasks');
         invalidate('items:');
+        invalidateTeamTasks();
         return json(res, 200, { ok: true, result });
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });
@@ -767,6 +772,31 @@ export function apply(ctx, config = {}) {
       }
     }
 
+    if (method === 'GET' && path === 'task-execution-options') {
+      const id = Number(url.searchParams.get('id') || 0);
+      if (!id) return json(res, 400, { ok: false, error: 'id required' });
+      try {
+        const data = await client.taskExecutionOptions(id);
+        return json(res, 200, Object.assign({ ok: true }, data));
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'task-execution') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.setTaskExecution(Number(body.id), Number(body.executionId));
+        invalidate('items:');
+        invalidate('dashboard');
+        invalidate('my-tasks');
+        invalidateTeamTasks();
+        return json(res, 200, { ok: true, result });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
     if (method === 'POST' && path === 'task-priority') {
       const body = JSON.parse((await readBody(req)) || '{}');
       try {
@@ -774,6 +804,7 @@ export function apply(ctx, config = {}) {
         invalidate('items:');
         invalidate('dashboard');
         invalidate('my-tasks');
+        invalidateTeamTasks();
         return json(res, 200, { ok: true, result });
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });
@@ -787,6 +818,7 @@ export function apply(ctx, config = {}) {
         invalidate('items:');
         invalidate('dashboard');
         invalidate('my-tasks');
+        invalidateTeamTasks();
         return json(res, 200, { ok: true, result });
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });
@@ -821,6 +853,7 @@ export function apply(ctx, config = {}) {
         const result = await client.changeTaskStatus(Number(body.id), String(body.statusKey || ''));
         invalidate('items:');
         invalidate('dashboard');
+        invalidateTeamTasks();
         return json(res, 200, { ok: true, result });
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });
@@ -833,6 +866,7 @@ export function apply(ctx, config = {}) {
         const result = await client.assignTask(Number(body.id), String(body.assignedTo || ''));
         invalidate('items:');
         invalidate('dashboard');
+        invalidateTeamTasks();
         return json(res, 200, { ok: true, result });
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });
@@ -846,6 +880,7 @@ export function apply(ctx, config = {}) {
         invalidate('items:');
         invalidate('dashboard');
         invalidate('my-tasks');
+        invalidateTeamTasks();
         return json(res, 200, { ok: true, result });
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });

@@ -936,6 +936,31 @@ export class ZenTaoClient {
     return { ok: true, moduleId: value };
   }
 
+  /** Iterations a task can be moved to (from its edit form). */
+  async taskExecutionOptions(taskId) {
+    const html = await this.#page(`/task-edit-${Number(taskId)}.html`);
+    const options = selectOptions(html, 'execution').map((option) => ({
+      value: String(option.value),
+      label: String(option.label || option.value).trim(),
+    }));
+    const task = await this.taskDetail(taskId);
+    return { options, current: String(task.execution || '') };
+  }
+
+  /** Move a task to another iteration by replaying its edit form. */
+  async setTaskExecution(taskId, executionId) {
+    const id = Number(taskId);
+    const target = Number(executionId);
+    if (!Number.isFinite(target) || target <= 0) throw new ZenTaoError('迭代不合法', 'ZT_INPUT');
+    const pagePath = `/task-edit-${id}.html`;
+    const html = await this.#page(pagePath);
+    const form = parseFormFields(html);
+    form.execution = String(target);
+    const res = await this.post(pagePath, form);
+    const parsed = parseFormResponse(res, '修改任务所属迭代');
+    return Object.assign({ ok: true, executionId: target }, parsed);
+  }
+
   /** Update a task deadline (YYYY-MM-DD). */
   async setTaskDeadline(taskId, deadline) {
     const id = Number(taskId);
@@ -1069,6 +1094,7 @@ export class ZenTaoClient {
             const data = await this.#apiRequest('GET', `executions/${execution.id}/tasks`);
             rows = (Array.isArray(data.tasks) ? data.tasks : []).map((task) => ({
               id: task.id,
+              type: 'task',
               title: task.name || '',
               assignedTo: task.assignedTo?.realname || task.assignedToRealName || '',
               assignedToAccount: task.assignedTo?.account || '',
@@ -1198,10 +1224,39 @@ export class ZenTaoClient {
       story: Number(input.storyId) || 0,
     };
     // ZenTao v1 creates tasks under an execution: POST /executions/{id}/tasks
-    const res = await this.#apiRequest('POST', `executions/${executionId}/tasks`, body);
-    const id = Number(res && res.id) || 0;
-    if (!id) throw new ZenTaoError('禅道没有返回新任务 ID', 'ZT_API');
-    return { ok: true, id, name: (res && res.name) || name, url: `/task-view-${id}.html` };
+    try {
+      const res = await this.#apiRequest('POST', `executions/${executionId}/tasks`, body);
+      const id = Number(res && res.id) || 0;
+      if (!id) throw new ZenTaoError('禅道没有返回新任务 ID', 'ZT_API');
+      return { ok: true, id, name: (res && res.name) || name, url: `/task-view-${id}.html` };
+    } catch (error) {
+      // 部分禅道账号的 REST 任务创建被拒绝（HTTP 403 Access not allowed），
+      // 但其网页创建表单有权限；回放表单创建，避免直接失败。
+      if (!/HTTP 403/.test(String(error && error.message))) throw error;
+      return await this.#createTaskViaForm(input, executionId, body, name);
+    }
+  }
+
+  async #createTaskViaForm(input, executionId, body, name) {
+    const pagePath = `/task-create-${executionId}.html`;
+    const html = await this.#page(pagePath);
+    const form = parseFormFields(html);
+    form.execution = String(executionId);
+    form.name = name;
+    form.pri = String(body.pri);
+    form.assignedTo = String(body.assignedTo || '');
+    if ('assignedTo[]' in form) form['assignedTo[]'] = String(body.assignedTo || '');
+    form.deadline = body.deadline;
+    form.estStarted = body.estStarted;
+    form.estimate = String(body.estimate || 0);
+    form.desc = body.desc || '';
+    form.module = String(body.module || 0);
+    form.story = String(body.story || 0);
+    const res = await this.post(pagePath, form);
+    const parsed = parseFormResponse(res, 'task-create');
+    if (parsed && parsed.ok === false) throw new ZenTaoError(parsed.message || parsed.error || '创建任务失败', 'ZT_API');
+    const id = Number(parsed && parsed.id) || 0;
+    return { ok: true, id, name, url: id ? `/task-view-${id}.html` : '' };
   }
 
   /** Detail text blocks of a story: description, acceptance criteria. */

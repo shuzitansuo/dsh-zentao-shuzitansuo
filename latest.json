@@ -1,5 +1,5 @@
 {
-  "version": "0.2.3",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.3.zip",
-  "notes": "项目 Emoji 宿主持久化；全员任务卡片等宽/彩色竖条；排序图标统一；服务端分页筛选"
+  "version": "0.2.4",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.4.zip",
+  "notes": "任务列表可编辑指派人/状态/截止日期/所属迭代；修复任务创建 403；左侧栏布局优化"
 }
