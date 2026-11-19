@@ -13,7 +13,7 @@ import { createZenTaoApi } from './lib/zentao-api.js';
 import { parseDocument } from './lib/doc.js';
 import { checkForUpdate, applyUpdate, applyUpdateBuffer } from './lib/update.js';
 import { createDeepSeekLlm } from './lib/deepseek.js';
-import { loadSettings, saveSettings } from './lib/settings.js';
+import { loadSettings, saveSettings, loadProjectEmojis, saveProjectEmojis } from './lib/settings.js';
 import { buildTeamTasksXlsx } from './lib/xlsx.js';
 
 export const name = 'dsh-zentao';
@@ -618,6 +618,20 @@ export function apply(ctx, config = {}) {
         if (!data) return json(res, 200, { ok: false, error: '更新包内容为空' });
         const result = await applyUpdateBuffer(Buffer.from(data, 'base64'));
         return json(res, 200, { ok: true, version: result.version, files: result.files, restartRequired: true });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'GET' && path === 'project-emojis') {
+      return json(res, 200, { ok: true, emojis: loadProjectEmojis() });
+    }
+
+    if (method === 'POST' && path === 'project-emojis') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const emojis = saveProjectEmojis(body.emojis || {});
+        return json(res, 200, { ok: true, emojis });
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });
       }

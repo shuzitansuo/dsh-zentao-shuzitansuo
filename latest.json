@@ -1,5 +1,5 @@
 {
-  "version": "0.2.2",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.2.zip",
-  "notes": "全员任务服务端分页/筛选/排序、导出；逾期日期样式对齐任务列表；预加载仪表盘/日历"
+  "version": "0.2.3",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.3.zip",
+  "notes": "项目 Emoji 宿主持久化；全员任务卡片等宽/彩色竖条；排序图标统一；服务端分页筛选"
 }

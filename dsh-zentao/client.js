@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.2';
+    const PLUGIN_VERSION = 'v0.2.3';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
@@ -640,6 +640,16 @@ window.__ModuleLoader__.load({
       return 'default';
     }
 
+    const TEAM_CARD_ACCENTS = ['#2f7cf6', '#e34d59', '#ed7b2f', '#2ba471', '#7b61ff', '#00a6a6', '#d46b08', '#eb2f96'];
+
+    function teamCardAccent(key, index) {
+      if (Number.isInteger(index)) return TEAM_CARD_ACCENTS[index % TEAM_CARD_ACCENTS.length];
+      const text = String(key || '');
+      let hash = 0;
+      for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+      return TEAM_CARD_ACCENTS[hash % TEAM_CARD_ACCENTS.length];
+    }
+
     function shortListDate(value) {
       const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
       if (!match) return value || '';
@@ -1079,6 +1089,45 @@ window.__ModuleLoader__.load({
       });
       const [emojiModal, setEmojiModal] = useState(null);
       const emojiDialogRef = useRef(null);
+
+      const commitProjectEmojis = useCallback((next) => {
+        setProjectEmojis(next);
+        try {
+          localStorage.setItem('dsh-zentao-project-emoji-v1', JSON.stringify(next));
+        } catch (error) {
+          /* ignore quota errors */
+        }
+        api('/zentao/api/project-emojis', {
+          method: 'POST',
+          headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+          body: JSON.stringify({ emojis: next }),
+        }).catch(() => {});
+      }, []);
+
+      useEffect(() => {
+        let alive = true;
+        api('/zentao/api/project-emojis')
+          .then((res) => {
+            if (!alive || !res || !res.ok) return;
+            const host = res.emojis || {};
+            let local = {};
+            try {
+              local = JSON.parse(localStorage.getItem('dsh-zentao-project-emoji-v1') || '{}') || {};
+            } catch (error) {
+              local = {};
+            }
+            if (!Object.keys(host).length && Object.keys(local).length) {
+              // 一次性迁移旧版本浏览器里的数据到宿主文件。
+              commitProjectEmojis(local);
+            } else {
+              setProjectEmojis(host);
+            }
+          })
+          .catch(() => {});
+        return () => {
+          alive = false;
+        };
+      }, [commitProjectEmojis]);
       const storyImageInputRef = useRef(null);
       const itemDialogRef = useRef(null);
       const [settingsOpen, setSettingsOpen] = useState(false);
@@ -5261,7 +5310,9 @@ window.__ModuleLoader__.load({
               'button',
               { type: 'button', className: 'zt-th-btn', onClick: () => toggleSort(key) },
               h('span', { className: 'zt-th-label' }, label),
-              h('span', { className: 'zt-sort' }, closedSort.key === key ? (closedSort.dir === 1 ? '▲' : '▼') : '⇅'),
+              closedSort.key === key
+                ? h('span', { className: 'zt-sort', 'aria-hidden': true }, h(GlyphIcon, { name: closedSort.dir === 1 ? 'arrow-up' : 'arrow-down', size: 16 }))
+                : null,
             ),
             h('span', { className: 'zt-col-resize', onMouseDown: (event) => startClosedColResize(event, key) }),
           );
@@ -5323,10 +5374,10 @@ window.__ModuleLoader__.load({
               ? h(
                   'div',
                   { className: 'zt-team-cards' },
-                  cards.map((entry) =>
+                  cards.map((entry, index) =>
                     h(
                       'div',
-                      { key: entry.key, className: 'zt-team-card' },
+                      { key: entry.key, className: 'zt-team-card', style: { '--zt-card-accent': teamCardAccent(entry.key, index) } },
                       h('div', { className: 'zt-team-card-name', title: entry.label }, entry.label),
                       h(
                         'button',
@@ -5533,7 +5584,9 @@ window.__ModuleLoader__.load({
               'button',
               { type: 'button', className: 'zt-th-btn', onClick: () => toggleSort(key) },
               h('span', { className: 'zt-th-label' }, label),
-              h('span', { className: 'zt-sort' }, teamSort.key === key ? (teamSort.dir === 1 ? '▲' : '▼') : '⇅'),
+              teamSort.key === key
+                ? h('span', { className: 'zt-sort', 'aria-hidden': true }, h(GlyphIcon, { name: teamSort.dir === 1 ? 'arrow-up' : 'arrow-down', size: 16 }))
+                : null,
             ),
             h('span', { className: 'zt-col-resize', onMouseDown: (event) => startTeamColResize(event, key) }),
           );
@@ -5595,10 +5648,10 @@ window.__ModuleLoader__.load({
               ? h(
                   'div',
                   { className: 'zt-team-cards' },
-                  cards.map((entry) =>
+                  cards.map((entry, index) =>
                     h(
                       'div',
-                      { key: entry.key, className: 'zt-team-card' },
+                      { key: entry.key, className: 'zt-team-card', style: { '--zt-card-accent': teamCardAccent(entry.key, index) } },
                       h('div', { className: 'zt-team-card-name', title: entry.label }, entry.label),
                       h(
                         'div',
@@ -5952,12 +6005,10 @@ window.__ModuleLoader__.load({
                       type: 'button',
                       onClick: () => {
                         const value = String(emojiModal.value || '').trim();
-                        setProjectEmojis((prev) => {
-                          const next = Object.assign({}, prev);
-                          if (value) next[emojiModal.projectId] = value;
-                          else delete next[emojiModal.projectId];
-                          return next;
-                        });
+                        const next = Object.assign({}, projectEmojis);
+                        if (value) next[emojiModal.projectId] = value;
+                        else delete next[emojiModal.projectId];
+                        commitProjectEmojis(next);
                         setEmojiModal(null);
                       },
                     },
@@ -8166,11 +8217,10 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-team-overview-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px}
 .zt-team-overview-title{font-size:13px;font-weight:600;color:var(--td-text-color-primary)}
 .zt-team-overview-hint{font-size:11px;color:var(--td-text-color-placeholder)}
-.zt-team-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-@container (max-width: 620px){.zt-team-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@container (max-width: 430px){.zt-team-cards{grid-template-columns:minmax(0,1fr)}}
+.zt-team-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;align-items:stretch}
+.zt-team-card{width:100%;max-width:360px;min-width:0;justify-self:start}
 .zt-team-card{position:relative;display:flex;flex-direction:column;gap:6px;min-width:0;min-height:112px;padding:14px 18px 12px 20px;border:1px solid var(--td-component-stroke);border-radius:16px;background:var(--td-bg-color-container);box-shadow:0 2px 8px rgba(0,0,0,.06);transition:box-shadow .2s,border-color .2s,transform .2s}
-.zt-team-card::before{content:'';position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:0 3px 3px 0;background:#2f7cf6}
+.zt-team-card::before{content:'';position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:0 3px 3px 0;background:var(--zt-card-accent,#2f7cf6)}
 .zt-team-card:hover{box-shadow:0 6px 16px rgba(0,0,0,.12);border-color:var(--td-border-level-2-color);transform:translateY(-1px)}
 .zt-team-card-name{font-size:13px;line-height:18px;color:var(--td-text-color-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .zt-team-card-metrics{display:flex;align-items:flex-end;gap:32px;margin-top:2px}

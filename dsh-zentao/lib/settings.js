@@ -46,3 +46,35 @@ export function saveSettings(values = {}) {
   }
   return next;
 }
+
+const EMOJI_PATH = path.join(SETTINGS_DIR, 'project-emojis.json');
+
+export function loadProjectEmojis() {
+  try {
+    const raw = JSON.parse(readFileSync(EMOJI_PATH, 'utf8'));
+    if (!raw || typeof raw !== 'object') return {};
+    const out = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (/^\d+$/.test(key) && typeof value === 'string' && value.trim()) out[key] = value.trim().slice(0, 8);
+    }
+    return out;
+  } catch (error) {
+    return {};
+  }
+}
+
+export function saveProjectEmojis(emojis = {}) {
+  const clean = {};
+  for (const [key, value] of Object.entries(emojis || {})) {
+    if (/^\d+$/.test(key) && typeof value === 'string' && value.trim()) clean[key] = value.trim().slice(0, 8);
+  }
+  try {
+    mkdirSync(SETTINGS_DIR, { recursive: true, mode: 0o700 });
+    const temp = EMOJI_PATH + '.tmp';
+    writeFileSync(temp, JSON.stringify(clean, null, 2) + '\n', { mode: 0o600 });
+    renameSync(temp, EMOJI_PATH);
+  } catch (error) {
+    /* persistence failure must not break the panel */
+  }
+  return clean;
+}
