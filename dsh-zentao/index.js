@@ -14,6 +14,7 @@ import { parseDocument } from './lib/doc.js';
 import { checkForUpdate, applyUpdate, applyUpdateBuffer } from './lib/update.js';
 import { createDeepSeekLlm } from './lib/deepseek.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
+import { buildTeamTasksXlsx } from './lib/xlsx.js';
 
 export const name = 'dsh-zentao';
 /** Tools service is optional for the custom-chat mode but required for native mode. */
@@ -402,6 +403,37 @@ export function apply(ctx, config = {}) {
         const data = await client.dashboard();
         cache.set('dashboard', { at: Date.now(), value: data });
         return json(res, 200, { ok: true, dashboard: data });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'GET' && path === 'team-tasks') {
+      const fresh = url.searchParams.get('fresh') === '1';
+      try {
+        const data = fresh
+          ? await client.teamTasks()
+          : await cached('team-tasks', 3 * 60 * 1000, () => client.teamTasks());
+        if (fresh) cache.set('team-tasks', { at: Date.now(), value: data });
+        return json(res, 200, { ok: true, tasks: data.tasks, members: data.members, updatedAt: data.updatedAt });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'team-tasks/export') {
+      try {
+        const body = JSON.parse((await readBody(req, 20 * 1024 * 1024)) || '{}');
+        const rows = Array.isArray(body.rows) ? body.rows : [];
+        const buffer = buildTeamTasksXlsx(rows, body.headers, body.fields);
+        const name = 'team-tasks-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+        res.writeHead(200, {
+          'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'content-disposition': 'attachment; filename="' + name + '"',
+          'content-length': buffer.length,
+          'cache-control': 'no-store',
+        });
+        res.end(buffer);
       } catch (error) {
         return json(res, 200, { ok: false, error: error?.message || String(error) });
       }

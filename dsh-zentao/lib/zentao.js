@@ -642,6 +642,7 @@ export class ZenTaoClient {
       priority: task.pri || '',
       status: task.status || '',
       statusText: TASK_STATUS_TEXT[task.status] || task.status || '',
+      done: task.status === 'done' || task.status === 'closed',
       assignedTo: task.assignedTo?.realname || task.assignedToRealName || '',
       assignedToAccount: task.assignedTo?.account || '',
       deadline: task.deadline || '',
@@ -1037,6 +1038,74 @@ export class ZenTaoClient {
       account: this.account,
       totals: { story: storyList.length, bug: bugList.length, task: taskList.length },
       lists: { story: storyList, bug: bugList, task: taskList },
+    };
+  }
+
+  /** All tasks across visible iterations, including completed/closed ones. */
+  async teamTasks() {
+    const [projectsData, executionsData] = await Promise.all([
+      this.#apiRequest('GET', 'projects').catch(() => ({ projects: [] })),
+      this.#apiRequest('GET', 'executions').catch(() => ({ executions: [] })),
+    ]);
+    const projectNames = new Map();
+    for (const project of Array.isArray(projectsData.projects) ? projectsData.projects : []) {
+      projectNames.set(Number(project.id), project.name || '');
+    }
+    const executions = Array.isArray(executionsData.executions) ? executionsData.executions : [];
+    const tasks = [];
+    const members = new Map();
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < executions.length) {
+        const execution = executions[cursor];
+        cursor += 1;
+        const cacheKey = 'team-exec:' + execution.id;
+        try {
+          const cached = this.taskCache.get(cacheKey);
+          let rows;
+          if (cached && Date.now() - cached.at < 3 * 60 * 1000) {
+            rows = cached.value;
+          } else {
+            const data = await this.#apiRequest('GET', `executions/${execution.id}/tasks`);
+            rows = (Array.isArray(data.tasks) ? data.tasks : []).map((task) => ({
+              id: task.id,
+              title: task.name || '',
+              assignedTo: task.assignedTo?.realname || task.assignedToRealName || '',
+              assignedToAccount: task.assignedTo?.account || '',
+              resolver: task.finishedBy?.realname || task.finishedBy?.account || task.closedBy?.realname || task.closedBy?.account || '',
+              resolverAccount: task.finishedBy?.account || task.closedBy?.account || '',
+              resolvedDate: String(task.finishedDate || task.closedDate || '').slice(0, 10),
+              status: task.status || '',
+              statusText: TASK_STATUS_TEXT[task.status] || task.status || '',
+              deadline: task.deadline || '',
+              done: task.status === 'done' || task.status === 'closed',
+              executionId: Number(execution.id),
+              executionName: execution.name || '',
+              projectId: Number(execution.project) || 0,
+              projectName: projectNames.get(Number(execution.project)) || '',
+              url: `/task-view-${task.id}.html`,
+            }));
+            this.taskCache.set(cacheKey, { at: Date.now(), value: rows });
+          }
+          for (const row of rows) {
+            tasks.push(row);
+            if (row.assignedToAccount || row.assignedTo) {
+              const key = row.assignedToAccount || row.assignedTo;
+              if (!members.has(key)) {
+                members.set(key, { account: row.assignedToAccount || '', label: row.assignedTo || key });
+              }
+            }
+          }
+        } catch (error) {
+          /* keep other iterations */
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, Math.max(1, executions.length)) }, () => worker()));
+    return {
+      tasks,
+      members: [...members.values()].sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN')),
+      updatedAt: Date.now(),
     };
   }
 
