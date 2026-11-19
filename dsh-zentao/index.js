@@ -848,6 +848,29 @@ export function apply(ctx, config = {}) {
       }
     }
 
+    if (method === 'GET' && path === 'execution-product') {
+      const id = Number(url.searchParams.get('id') || 0);
+      if (!id) return json(res, 400, { ok: false, error: 'id required' });
+      try {
+        const data = await client.executionProduct(id);
+        return json(res, 200, Object.assign({ ok: true }, data));
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'story-image') {
+      try {
+        const body = JSON.parse((await readBody(req, 20 * 1024 * 1024)) || '{}');
+        const bytes = Buffer.from(String(body.data || ''), 'base64');
+        if (!bytes.length) return json(res, 200, { ok: false, error: '图片内容为空' });
+        const result = await client.uploadEditorImage(bytes, body.mimeType, body.name);
+        return json(res, 200, result);
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
     if (method === 'POST' && path === 'create') {
       const body = JSON.parse((await readBody(req)) || '{}');
       const result = await createItem(client, body);

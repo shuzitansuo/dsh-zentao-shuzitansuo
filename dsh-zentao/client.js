@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.0.9';
+    const PLUGIN_VERSION = 'v0.1.0';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
@@ -1014,6 +1014,7 @@ window.__ModuleLoader__.load({
       });
       const [emojiModal, setEmojiModal] = useState(null);
       const emojiDialogRef = useRef(null);
+      const storyImageInputRef = useRef(null);
       const itemDialogRef = useRef(null);
       const [settingsOpen, setSettingsOpen] = useState(false);
       const [settingsLoading, setSettingsLoading] = useState(false);
@@ -1891,6 +1892,46 @@ window.__ModuleLoader__.load({
         }
       };
 
+      const uploadStoryImage = (file) => {
+        if (!file || !/^image\//i.test(file.type || '')) {
+          setItemModal((prev) => (prev ? Object.assign({}, prev, { error: '请选择图片文件' }) : prev));
+          return;
+        }
+        if (file.size > 10 * 1024 * 1024) {
+          setItemModal((prev) => (prev ? Object.assign({}, prev, { error: '图片不能超过 10MB' }) : prev));
+          return;
+        }
+        setItemModal((prev) => (prev ? Object.assign({}, prev, { uploadingImage: true, error: '' }) : prev));
+        const reader = new FileReader();
+        reader.onload = async () => {
+          try {
+            const raw = String(reader.result || '');
+            const comma = raw.indexOf(',');
+            const data = comma >= 0 ? raw.slice(comma + 1) : raw;
+            const res = await api('/zentao/api/story-image', {
+              method: 'POST',
+              headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+              body: JSON.stringify({ data, mimeType: file.type, name: file.name }),
+            });
+            if (!res || !res.ok) throw new Error((res && res.error) || '上传图片失败');
+            const alt = String(file.name || 'image').replace(/"/g, '&quot;');
+            setItemModal((prev) =>
+              prev
+                ? Object.assign({}, prev, {
+                    uploadingImage: false,
+                    description: (prev.description || '') + '<p><img src="' + res.url + '" alt="' + alt + '"></p>',
+                  })
+                : prev,
+            );
+          } catch (error) {
+            setItemModal((prev) => (prev ? Object.assign({}, prev, { uploadingImage: false, error: error.message }) : prev));
+          }
+        };
+        reader.onerror = () =>
+          setItemModal((prev) => (prev ? Object.assign({}, prev, { uploadingImage: false, error: '读取图片失败' }) : prev));
+        reader.readAsDataURL(file);
+      };
+
       const openItemModal = async (kind) => {
         const executionId = Number(selection.executionId) || 0;
         if (!executionId) return;
@@ -1904,6 +1945,7 @@ window.__ModuleLoader__.load({
           users: [],
           loading: true,
           submitting: false,
+          uploadingImage: false,
           error: '',
           executionId,
           executionName: selection.executionName || '',
@@ -1915,10 +1957,16 @@ window.__ModuleLoader__.load({
           if (!iterations || !iterations.ok) throw new Error((iterations && iterations.error) || '读取迭代信息失败');
           const execution = (iterations.iterations || []).find((item) => Number(item.id) === executionId);
           if (!execution) throw new Error('当前迭代不在可写列表中');
+          let productId = Number(execution.productId) || 0;
+          if (!productId) {
+            const product = await api('/zentao/api/execution-product?id=' + executionId).catch(() => null);
+            productId = Number(product && product.ok && product.productId) || 0;
+          }
+          if (!productId) throw new Error('无法确定当前迭代所属产品');
           setItemModal((prev) =>
             prev
               ? Object.assign({}, prev, {
-                  productId: Number(execution.productId) || 0,
+                  productId,
                   executionName: execution.name || prev.executionName,
                   projectId: Number(execution.projectId) || prev.projectId,
                 })
@@ -4619,6 +4667,13 @@ window.__ModuleLoader__.load({
 
       const renderDashboard = () => {
         const data = dashboard.data;
+        const todayKey = (() => {
+          const now = new Date();
+          return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        })();
+        const isOverdue = (item) =>
+          Boolean(item && /^\d{4}-\d{2}-\d{2}$/.test(String(item.deadline || '')) && item.deadline < todayKey);
+        const overdueCount = (key) => ((data && data.lists && data.lists[key]) || []).filter(isOverdue).length;
         const range = data ? data.weekStart + ' ~ ' + data.weekEnd : '';
         const cards = [
           { key: 'story', label: '研发需求' },
@@ -4674,6 +4729,9 @@ window.__ModuleLoader__.load({
                     'div',
                     { key: card.key, className: 'zt-dash-card zt-dash-card-' + card.key },
                     h('div', { className: 'zt-dash-card-label' }, card.label),
+                    overdueCount(card.key)
+                      ? h('span', { className: 'zt-dash-overdue-badge' }, '延期 ' + overdueCount(card.key))
+                      : null,
                     h('div', { className: 'zt-dash-card-count' }, String((data.totals && data.totals[card.key]) || 0)),
                     h('div', { className: 'zt-dash-card-meta' }, '本周待完成'),
                   ),
@@ -4711,6 +4769,7 @@ window.__ModuleLoader__.load({
                                 title: '在禅道打开',
                               },
                               h('span', { className: 'zt-dash-row-dot zt-dash-dot-' + section.key, 'aria-hidden': true }),
+                              isOverdue(item) ? h('span', { className: 'zt-dash-row-overdue' }, '延期') : null,
                               h('span', { className: 'zt-dash-row-title' }, item.title),
                               h(
                                 'span',
@@ -5140,10 +5199,48 @@ window.__ModuleLoader__.load({
                       className: 'zt-textarea',
                       rows: 4,
                       value: itemModal.description,
-                      placeholder: itemModal.kind === 'story' ? '背景、目标、范围等' : '操作步骤、实际结果等',
+                      placeholder: itemModal.kind === 'story' ? '背景、目标、范围等（可直接粘贴图片）' : '操作步骤、实际结果等',
+                      onPaste: (event) => {
+                        if (itemModal.kind !== 'story' || itemModal.uploadingImage) return;
+                        const item = Array.from(event.clipboardData.items || []).find(
+                          (entry) => entry.kind === 'file' && entry.type.indexOf('image/') === 0,
+                        );
+                        const file = item && item.getAsFile();
+                        if (!file) return;
+                        event.preventDefault();
+                        uploadStoryImage(file);
+                      },
                       onChange: (event) =>
                         setItemModal((prev) => (prev ? Object.assign({}, prev, { description: event.target.value }) : prev)),
                     }),
+                    itemModal.kind === 'story'
+                      ? h(
+                          'div',
+                          { className: 'zt-field-extra' },
+                          h(
+                            'button',
+                            {
+                              className: 'zt-link-btn',
+                              type: 'button',
+                              disabled: itemModal.uploadingImage,
+                              onClick: () => storyImageInputRef.current && storyImageInputRef.current.click(),
+                            },
+                            itemModal.uploadingImage ? '图片上传中…' : '上传图片',
+                          ),
+                          h('span', { className: 'zt-field-hint' }, '也可以直接粘贴截图'),
+                          h('input', {
+                            ref: storyImageInputRef,
+                            type: 'file',
+                            accept: 'image/*',
+                            style: { display: 'none' },
+                            onChange: (event) => {
+                              const file = event.target.files && event.target.files[0];
+                              event.target.value = '';
+                              if (file) uploadStoryImage(file);
+                            },
+                          }),
+                        )
+                      : null,
                   ),
                   itemModal.kind === 'story'
                     ? h(
@@ -5168,7 +5265,7 @@ window.__ModuleLoader__.load({
                   h('button', { className: 'zt-btn zt-btn-ghost', type: 'button', onClick: () => setItemModal(null) }, '取消'),
                   h(
                     'button',
-                    { className: 'zt-btn zt-btn-primary', type: 'button', disabled: itemModal.submitting || itemModal.loading, onClick: submitItemModal },
+                    { className: 'zt-btn zt-btn-primary', type: 'button', disabled: itemModal.submitting || itemModal.loading || itemModal.uploadingImage, onClick: submitItemModal },
                     itemModal.submitting ? '创建中…' : '确定',
                   ),
                 ),
@@ -7033,6 +7130,9 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-emoji-option-active{border-color:var(--td-brand-color);background:var(--td-brand-color-light)}
 .zt-link-btn{align-self:flex-start;padding:0;border:0;background:transparent;color:var(--td-text-color-brand);font-size:12px;cursor:pointer}
 .zt-link-btn:hover{text-decoration:underline}
+.zt-link-btn:disabled{color:var(--td-text-color-placeholder);cursor:default;text-decoration:none}
+.zt-field-extra{display:flex;align-items:center;gap:10px;margin-top:6px}
+.zt-field-hint{font-size:11px;line-height:16px;color:var(--td-text-color-placeholder)}
 .zt-tree-project:hover .zt-tree-icon-caret{display:inline-flex}
 .zt-tree-children-wrap{display:grid;grid-template-rows:0fr;transition:grid-template-rows .22s cubic-bezier(.4,0,.2,1)}
 .zt-tree-children-wrap.zt-tree-children-open{grid-template-rows:1fr}
@@ -7099,6 +7199,8 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-dash-list-count{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:20px;padding:0 7px;border-radius:20px;background:rgba(255,255,255,.22);color:#fff;font-size:12px;font-weight:500;font-variant-numeric:tabular-nums}
 .zt-dash-list-body{flex:1;min-height:0;overflow:auto;padding:4px 0;scrollbar-width:thin}
 .zt-dash-row{display:flex;align-items:center;gap:10px;padding:9px 14px;text-decoration:none;color:var(--td-text-color-primary)}
+.zt-dash-overdue-badge{position:absolute;top:14px;right:16px;padding:1px 8px;border-radius:10px;background:#e34d59;color:#fff;font-size:11px;line-height:18px;font-weight:500;z-index:1}
+.zt-dash-row-overdue{flex:0 0 auto;color:#e34d59;font-size:12px;font-weight:600;line-height:18px}
 .zt-dash-row-dot{flex:0 0 auto;width:5px;height:5px;border-radius:50%;background:var(--td-brand-color)}
 .zt-dash-dot-story{background:#2f7cf6}
 .zt-dash-dot-bug{background:#e34d59}

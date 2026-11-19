@@ -845,6 +845,14 @@ export class ZenTaoClient {
     return { ok: true, assignedTo: value };
   }
 
+  /** Resolve the product behind an execution (list API often omits it). */
+  async executionProduct(executionId) {
+    const detail = await this.#apiRequest('GET', `executions/${Number(executionId)}`);
+    const productId = Number(detail.product) || Number(Array.isArray(detail.products) && detail.products[0] && detail.products[0].id) || 0;
+    const name = (Array.isArray(detail.products) && detail.products[0] && detail.products[0].name) || '';
+    return { productId, name };
+  }
+
   /** Module options available to a story (from its edit form). */
   async storyModuleOptions(storyId) {
     const html = await this.#page(`/story-edit-${Number(storyId)}.html`);
@@ -876,6 +884,33 @@ export class ZenTaoClient {
       label: String(option.label || '').replace(/^\/+/, '').trim() || '无',
     }));
     return { modules };
+  }
+
+  /** Upload an image through ZenTao's KindEditor endpoint and return its url. */
+  async uploadEditorImage(buffer, mimeType, filename) {
+    const pageHtml = await this.#page('/story-create-1-0-0-0.html');
+    const kuid = (pageHtml.match(/kuid\s*=\s*'([^']+)'/) || [])[1];
+    if (!kuid) throw new ZenTaoError('无法获取禅道图片上传凭证', 'ZT_UPLOAD');
+    const form = new FormData();
+    form.append('imgFile', new Blob([buffer], { type: mimeType || 'image/png' }), filename || 'image.png');
+    const res = await this.request(`/file-ajaxUpload-${kuid}.html?onlybody=yes`, {
+      method: 'POST',
+      body: form,
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        Referer: this.baseUrl + '/story-create-1-0-0-0.html',
+      },
+    });
+    let data = null;
+    try {
+      data = JSON.parse(res.text || '{}');
+    } catch (error) {
+      data = null;
+    }
+    if (!data || data.error || !data.url) {
+      throw new ZenTaoError((data && data.message) || '图片上传失败', 'ZT_UPLOAD');
+    }
+    return { ok: true, url: String(data.url) };
   }
 
   /** Update a task priority (1 P1 .. 3 P3). */

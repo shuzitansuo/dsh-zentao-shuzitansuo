@@ -1,5 +1,5 @@
 {
-  "version": "0.0.9",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.0.9.zip",
-  "notes": "任务优先级、完整状态列表、项目 Emoji、置顶名称同步、新指派弹窗优化"
+  "version": "0.1.0",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.1.0.zip",
+  "notes": "需求描述支持图片上传/粘贴；修复需求所属产品；仪表盘延期标记"
 }
