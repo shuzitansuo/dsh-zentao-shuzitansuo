@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.0';
+    const PLUGIN_VERSION = 'v0.2.1';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
@@ -1683,11 +1683,10 @@ window.__ModuleLoader__.load({
       }, []);
 
       useEffect(() => {
-        if (view === 'dashboard' && !dashboard.data && !dashboard.loading) {
-          loadDashboard(false);
-          loadMyTasks(false);
-        }
-      }, [view, dashboard.data, dashboard.loading, loadDashboard, loadMyTasks]);
+        // 进入插件就预热仪表盘和日历任务，即使用户先落在列表/全员任务页。
+        if (!dashboard.data && !dashboard.loading) loadDashboard(false);
+        if (!myTasks.loading && !myTasks.tasks.length) loadMyTasks(false);
+      }, [dashboard.data, dashboard.loading, myTasks.loading, myTasks.tasks.length, loadDashboard, loadMyTasks]);
 
       useEffect(() => {
         if (chatMode !== 'custom') return undefined;
@@ -8207,7 +8206,8 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-main-team{overflow:hidden}
 .zt-team-wrap{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--td-bg-color-container);overflow:hidden}
 .zt-team{flex:1;min-height:0;display:flex;flex-direction:column;padding:0;gap:0;min-width:0}
-.zt-team-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;padding:0 16px;border-bottom:1px solid var(--td-component-stroke)}
+.zt-team-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;padding:0 16px;border-bottom:1px solid var(--td-component-stroke);-webkit-app-region:drag}
+.zt-team-head .zt-tabs,.zt-team-head .zt-team-actions,.zt-team-head button,.zt-team-head select,.zt-team-head a{-webkit-app-region:no-drag}
 .zt-team-title-wrap{display:flex;align-items:stretch;min-width:0}
 .zt-team-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .zt-team-export{height:30px;padding:0 14px;font-size:12px}

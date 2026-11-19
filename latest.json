@@ -1,5 +1,5 @@
 {
-  "version": "0.2.0",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.0.zip",
-  "notes": "全员任务双 Tab（未关闭/已关闭）、成员卡片总览、解决人/解决时间、筛选分页导出、刷新防抖与超时"
+  "version": "0.2.1",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.1.zip",
+  "notes": "全员任务顶部可拖拽；进入插件预加载仪表盘与日历任务"
 }
