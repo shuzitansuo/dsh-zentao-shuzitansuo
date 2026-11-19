@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.4';
+    const PLUGIN_VERSION = 'v0.2.5';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -1057,6 +1057,7 @@ window.__ModuleLoader__.load({
       const [colWidths, setColWidths] = useState(loadColWidths);
       const [colOrder, setColOrder] = useState(loadColOrder);
       const [lightsPad, setLightsPad] = useState(0);
+      const [dshLeftCollapsed, setDshLeftCollapsed] = useState(false);
       const [cellEditor, setCellEditor] = useState(null);
       const [statusMenu, setStatusMenu] = useState(null);
       const [actionError, setActionError] = useState('');
@@ -1556,6 +1557,10 @@ window.__ModuleLoader__.load({
         const update = () => {
           const rect = el.getBoundingClientRect();
           setLightsPad(isMac ? Math.max(0, 76 - rect.left) : 0);
+          // DSH's AppFrame exposes data-sidebar-collapsed while the left
+          // sidebar is collapsed; fall back to the panel position elsewhere.
+          const shell = document.querySelector('[data-sidebar-collapsed]');
+          setDshLeftCollapsed(shell ? true : isMac ? rect.left < 76 : rect.left < 8);
         };
         update();
         let observer = null;
@@ -1563,9 +1568,15 @@ window.__ModuleLoader__.load({
           observer = new ResizeObserver(update);
           observer.observe(el);
         }
+        let mutation = null;
+        if (typeof MutationObserver === 'function') {
+          mutation = new MutationObserver(update);
+          mutation.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['data-sidebar-collapsed'] });
+        }
         window.addEventListener('resize', update);
         return () => {
           if (observer) observer.disconnect();
+          if (mutation) mutation.disconnect();
           window.removeEventListener('resize', update);
         };
       }, [isMac]);
@@ -2446,7 +2457,7 @@ window.__ModuleLoader__.load({
         const page = options.page !== undefined ? options.page : tab === 'closed' ? closedPage : teamPage;
         const pageSize = options.pageSize !== undefined ? options.pageSize : tab === 'closed' ? closedPageSize : teamPageSize;
         if (teamBusyRef.current) return;
-        if (fresh && Date.now() - teamFreshAtRef.current < 3000) return;
+        if (fresh && !options.force && Date.now() - teamFreshAtRef.current < 3000) return;
         if (fresh) teamFreshAtRef.current = Date.now();
         const seq = ++teamSeqRef.current;
         teamBusyRef.current = true;
@@ -3175,11 +3186,11 @@ window.__ModuleLoader__.load({
       const TAB_LABELS = { story: '研发需求', bug: 'BUG', task: '任务', testtask: '测试单', report: '测试报告' };
       const TEAM_COLUMNS = [
         { key: 'id', label: 'ID', width: 7, min: 56 },
-        { key: 'title', label: '任务名称', width: 25, min: 170 },
-        { key: 'assignee', label: '指派人', width: 11, min: 84 },
+        { key: 'title', label: '任务名称', width: 24, min: 170 },
+        { key: 'assignee', label: '指派人', width: 13, min: 112 },
         { key: 'status', label: '状态', width: 10, min: 80 },
         { key: 'deadline', label: '截止完成时间', width: 15, min: 104 },
-        { key: 'overdue', label: '是否延期', width: 10, min: 84 },
+        { key: 'overdue', label: '是否延期', width: 9, min: 80 },
         { key: 'execution', label: '所属迭代', width: 22, min: 170 },
       ];
       const CLOSED_COLUMNS = [
@@ -5253,7 +5264,7 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 title: '刷新',
                 disabled: teamTasks.loading,
-                onClick: () => loadTeamTasks(true),
+                onClick: () => loadTeamTasks(true, { force: true }),
               },
               h(GlyphIcon, { name: 'refresh', size: 16 }),
             ),
@@ -5367,6 +5378,8 @@ window.__ModuleLoader__.load({
         })();
         const isWeekActive = closedFilters.start === weekRange.start && closedFilters.end === weekRange.end;
         const isMonthActive = closedFilters.start === monthRange.start && closedFilters.end === monthRange.end;
+        const todayKey = isoDate(new Date());
+        const isTodayActive = closedFilters.start === todayKey && closedFilters.end === todayKey;
         const exportRows = async () => {
           if (teamExporting) return;
           setTeamExporting(true);
@@ -5444,6 +5457,7 @@ window.__ModuleLoader__.load({
               ariaStart: '解决时间开始',
               ariaEnd: '解决时间结束',
             }),
+            h('button', { className: 'zt-chip-btn' + (isTodayActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: () => patchFilters({ start: todayKey, end: todayKey }) }, '今天'),
             h('button', { className: 'zt-chip-btn' + (isWeekActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: () => patchFilters({ start: weekRange.start, end: weekRange.end }) }, '本周'),
             h('button', { className: 'zt-chip-btn' + (isMonthActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: () => patchFilters({ start: monthRange.start, end: monthRange.end }) }, '本月'),
             h(
@@ -5641,6 +5655,8 @@ window.__ModuleLoader__.load({
         })();
         const isWeekActive = teamFilters.start === weekRange.start && teamFilters.end === weekRange.end;
         const isMonthActive = teamFilters.start === monthRange.start && teamFilters.end === monthRange.end;
+        const todayKey = isoDate(new Date());
+        const isTodayActive = teamFilters.start === todayKey && teamFilters.end === todayKey;
         const exportRows = async () => {
           if (teamExporting) return;
           setTeamExporting(true);
@@ -5733,6 +5749,7 @@ window.__ModuleLoader__.load({
               ariaStart: '截止完成时间开始',
               ariaEnd: '截止完成时间结束',
             }),
+            h('button', { className: 'zt-chip-btn' + (isTodayActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: () => patchFilters({ start: todayKey, end: todayKey }) }, '今天'),
             h('button', { className: 'zt-chip-btn' + (isWeekActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: () => patchFilters({ start: weekRange.start, end: weekRange.end }) }, '本周'),
             h('button', { className: 'zt-chip-btn' + (isMonthActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: () => patchFilters({ start: monthRange.start, end: monthRange.end }) }, '本月'),
             h(
@@ -5968,7 +5985,8 @@ window.__ModuleLoader__.load({
             'zt-root' +
             (isMac ? ' zt-mac' : '') +
             (lightsPad > 0 ? ' zt-under-lights' : '') +
-            (layout.leftOpen ? ' zt-left-open' : ' zt-left-closed'),
+            (layout.leftOpen ? ' zt-left-open' : ' zt-left-closed') +
+            (dshLeftCollapsed ? ' zt-dsh-left-collapsed' : ''),
           ref: rootRef,
         },
         h('style', { key: 'zt-style' }, CSS),
@@ -8129,7 +8147,7 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-mac .zt-rail{padding-top:0}
 .zt-under-lights .zt-left .zt-pane-head{padding-left:var(--zt-pane-head-pad,16px)}
 .zt-under-lights.zt-left-closed .zt-main-head{padding-left:var(--zt-main-head-pad,16px)}
-.zt-root.zt-left-closed .zt-main-head .zt-tabs,.zt-root.zt-left-closed .zt-team-head .zt-tabs{margin-left:100px}
+:is(html,body):has([data-sidebar-collapsed]) .zt-root.zt-left-closed .zt-main-head .zt-tabs,:is(html,body):has([data-sidebar-collapsed]) .zt-root.zt-left-closed .zt-team-head .zt-tabs{margin-left:100px}
 .zt-pane-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px 0 16px;border-bottom:1px solid var(--td-component-stroke);height:48px;min-height:48px;min-width:0;-webkit-app-region:drag}
 .zt-pane-title{font:var(--td-font-title-small);color:var(--td-text-color-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;transition:max-width .22s cubic-bezier(.4,0,.2,1),opacity .12s linear}
 .zt-head-actions{display:flex;align-items:center;gap:4px;margin-left:auto;-webkit-app-region:no-drag}
@@ -8288,7 +8306,7 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-team-error{margin:0;color:var(--td-error-color);font-size:12px}
 .zt-team-body{flex:1;min-height:0;overflow:auto;border:0;border-radius:0;background:var(--td-bg-color-container)}
 .zt-team-loading,.zt-team-empty{display:flex;align-items:center;justify-content:center;height:100%;min-height:160px;color:var(--td-text-color-placeholder);font-size:13px}
-.zt-table.zt-table-team{table-layout:fixed;min-width:820px}
+.zt-table.zt-table-team{table-layout:fixed;min-width:860px}
 .zt-table-team .zt-team-col-title a{color:var(--td-text-color-primary);text-decoration:none}
 .zt-table-team .zt-team-col-title a:hover{color:var(--td-text-color-brand);text-decoration:underline}
 .zt-table-team tbody tr{cursor:default}

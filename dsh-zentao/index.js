@@ -518,6 +518,9 @@ export function apply(ctx, config = {}) {
     if (method === 'GET' && path === 'team-tasks') {
       const fresh = url.searchParams.get('fresh') === '1';
       try {
+        if (fresh) {
+          for (const key of [...client.taskCache.keys()]) if (String(key).startsWith('team-exec:')) client.taskCache.delete(key);
+        }
         const data = fresh
           ? await client.teamTasks()
           : await cached('team-tasks', 3 * 60 * 1000, () => client.teamTasks());

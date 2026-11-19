@@ -1,5 +1,5 @@
 {
-  "version": "0.2.4",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.4.zip",
-  "notes": "任务列表可编辑指派人/状态/截止日期/所属迭代；修复任务创建 403；左侧栏布局优化"
+  "version": "0.2.5",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.5.zip",
+  "notes": "任务页新增今天筛选；修复任务页刷新缓存；指派人列加宽；双栏收起时 Tab 偏移"
 }
