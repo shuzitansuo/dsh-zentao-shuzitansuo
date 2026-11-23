@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.6';
+    const PLUGIN_VERSION = 'v0.2.7';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -959,14 +959,14 @@ window.__ModuleLoader__.load({
       const [items, setItems] = useState({ story: [], bug: [], task: [], testtask: [], report: [] });
       // 每次打开软件默认进入仪表盘；会话内可切到列表。
       const [view, setView] = useState('dashboard');
-      const [teamTasks, setTeamTasks] = useState({ loading: false, error: '', tasks: [], members: [], loaded: false });
-      const [teamFilters, setTeamFilters] = useState({ member: '', status: '', start: '', end: '', q: '' });
+      const [teamTasks, setTeamTasks] = useState({ loading: false, error: '', tasks: [], members: [], executions: [], loaded: false });
+      const [teamFilters, setTeamFilters] = useState({ member: '', execution: '', status: '', start: '', end: '', q: '' });
       const [teamSort, setTeamSort] = useState({ key: 'deadline', dir: 1 });
       const [teamPage, setTeamPage] = useState(1);
       const [teamPageSize, setTeamPageSize] = useState(20);
       const [teamExporting, setTeamExporting] = useState(false);
       const [teamTab, setTeamTab] = useState('open');
-      const [closedFilters, setClosedFilters] = useState({ member: '', start: '', end: '', q: '' });
+      const [closedFilters, setClosedFilters] = useState({ member: '', execution: '', start: '', end: '', q: '' });
       const [closedSort, setClosedSort] = useState({ key: 'resolvedDate', dir: 1 });
       const [closedPage, setClosedPage] = useState(1);
       const [closedPageSize, setClosedPageSize] = useState(20);
@@ -2470,6 +2470,7 @@ window.__ModuleLoader__.load({
             page: String(page || 1),
             pageSize: String(pageSize || 20),
             member: filters.member || '',
+            execution: filters.execution || '',
             status: filters.status || '',
             start: filters.start || '',
             end: filters.end || '',
@@ -2488,6 +2489,7 @@ window.__ModuleLoader__.load({
             rows: res.rows || [],
             cards: res.cards || [],
             members: res.members || [],
+            executions: res.executions || [],
             total: res.total || 0,
             tabCounts: res.tabCounts || { open: 0, closed: 0 },
             page: res.page || 1,
@@ -5444,7 +5446,7 @@ window.__ModuleLoader__.load({
             const res = await fetch('/zentao/api/team-tasks/export', {
               method: 'POST',
               headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
-              body: JSON.stringify({ tab: 'closed', member: closedFilters.member, start: closedFilters.start, end: closedFilters.end, q: closedFilters.q, sort: closedSort.key, dir: closedSort.dir }),
+              body: JSON.stringify({ tab: 'closed', member: closedFilters.member, execution: closedFilters.execution, start: closedFilters.start, end: closedFilters.end, q: closedFilters.q, sort: closedSort.key, dir: closedSort.dir }),
             });
             if (!res.ok) throw new Error('导出失败（HTTP ' + res.status + '）');
             const blob = await res.blob();
@@ -5473,7 +5475,7 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'zt-team-overview-head' },
               h('span', { className: 'zt-team-overview-title' }, '已关闭任务总览'),
-              h('span', { className: 'zt-team-overview-hint' }, '按解决时间 / 解决人筛选'),
+              h('span', { className: 'zt-team-overview-hint' }, '按解决时间 / 迭代 / 解决人筛选'),
             ),
             cards.length
               ? h(
@@ -5519,6 +5521,19 @@ window.__ModuleLoader__.load({
             h('button', { className: 'zt-chip-btn' + (isMonthActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: () => patchFilters({ start: monthRange.start, end: monthRange.end }) }, '本月'),
             h(
               'select',
+              {
+                className: 'zt-team-input zt-team-select zt-team-execution-select',
+                value: closedFilters.execution,
+                onChange: (event) => patchFilters({ execution: event.target.value }),
+                title: '按所属迭代筛选',
+              },
+              h('option', { value: '' }, '全部迭代'),
+              (teamTasks.executions || []).map((execution) =>
+                h('option', { key: execution.id, value: execution.id }, execution.label),
+              ),
+            ),
+            h(
+              'select',
               { className: 'zt-team-input zt-team-select', value: closedFilters.member, onChange: (event) => patchFilters({ member: event.target.value }) },
               h('option', { value: '' }, '全部解决人'),
               cards.map((entry) => h('option', { key: entry.key, value: entry.key }, entry.label)),
@@ -5529,7 +5544,7 @@ window.__ModuleLoader__.load({
               value: closedFilters.q,
               onChange: (event) => patchFilters({ q: event.target.value }),
             }),
-            h('button', { className: 'zt-chip-btn', type: 'button', onClick: () => patchFilters({ member: '', start: '', end: '', q: '' }) }, '清除筛选'),
+            h('button', { className: 'zt-chip-btn', type: 'button', onClick: () => patchFilters({ member: '', execution: '', start: '', end: '', q: '' }) }, '清除筛选'),
           ),
           h(
             'div',
@@ -5721,7 +5736,7 @@ window.__ModuleLoader__.load({
             const res = await fetch('/zentao/api/team-tasks/export', {
               method: 'POST',
               headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
-              body: JSON.stringify({ tab: 'open', member: teamFilters.member, status: teamFilters.status, start: teamFilters.start, end: teamFilters.end, q: teamFilters.q, sort: teamSort.key, dir: teamSort.dir }),
+              body: JSON.stringify({ tab: 'open', member: teamFilters.member, execution: teamFilters.execution, status: teamFilters.status, start: teamFilters.start, end: teamFilters.end, q: teamFilters.q, sort: teamSort.key, dir: teamSort.dir }),
             });
             if (!res.ok) throw new Error('导出失败（HTTP ' + res.status + '）');
             const blob = await res.blob();
@@ -5750,7 +5765,7 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'zt-team-overview-head' },
               h('span', { className: 'zt-team-overview-title' }, '任务总览'),
-              h('span', { className: 'zt-team-overview-hint' }, '按截止完成时间 / 成员筛选 · 不含已关闭任务'),
+              h('span', { className: 'zt-team-overview-hint' }, '按截止完成时间 / 迭代 / 成员筛选 · 不含已关闭任务'),
             ),
             cards.length
               ? h(
@@ -5811,6 +5826,19 @@ window.__ModuleLoader__.load({
             h('button', { className: 'zt-chip-btn' + (isMonthActive ? ' zt-chip-btn-active' : ''), type: 'button', onClick: () => patchFilters({ start: monthRange.start, end: monthRange.end }) }, '本月'),
             h(
               'select',
+              {
+                className: 'zt-team-input zt-team-select zt-team-execution-select',
+                value: teamFilters.execution,
+                onChange: (event) => patchFilters({ execution: event.target.value }),
+                title: '按所属迭代筛选',
+              },
+              h('option', { value: '' }, '全部迭代'),
+              (teamTasks.executions || []).map((execution) =>
+                h('option', { key: execution.id, value: execution.id }, execution.label),
+              ),
+            ),
+            h(
+              'select',
               { className: 'zt-team-input zt-team-select', value: teamFilters.member, onChange: (event) => patchFilters({ member: event.target.value }) },
               h('option', { value: '' }, '全部成员'),
               (teamTasks.members || []).map((member) => h('option', { key: member.account || member.label, value: member.account || member.label }, member.label)),
@@ -5831,7 +5859,7 @@ window.__ModuleLoader__.load({
               value: teamFilters.q,
               onChange: (event) => patchFilters({ q: event.target.value }),
             }),
-            h('button', { className: 'zt-chip-btn', type: 'button', onClick: () => patchFilters({ member: '', status: '', start: '', end: '', q: '' }) }, '清除筛选'),
+            h('button', { className: 'zt-chip-btn', type: 'button', onClick: () => patchFilters({ member: '', execution: '', status: '', start: '', end: '', q: '' }) }, '清除筛选'),
           ),
           h(
             'div',
@@ -8335,6 +8363,7 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-team-input{box-sizing:border-box;height:30px;min-height:30px;padding:0 8px;border:1px solid var(--td-component-stroke);border-radius:6px;background:var(--td-bg-color-container);color:var(--td-text-color-primary);font-size:12px;line-height:28px;outline:none}
 .zt-team-input:focus{border-color:var(--td-brand-color)}
 .zt-team-select{width:128px;flex:0 0 auto}
+.zt-team-execution-select{width:auto;min-width:144px;max-width:220px}
 .zt-chip-btn.zt-chip-btn-active,.zt-chip-btn.zt-chip-btn-active:hover{background:var(--td-brand-color-light);border-color:var(--td-brand-color);color:var(--td-brand-color)}
 .zt-team-range{display:flex;align-items:center;gap:6px;height:30px;min-width:250px;padding:0 8px;border:1px solid var(--td-component-stroke);border-radius:6px;background:var(--td-bg-color-container);box-sizing:border-box}
 .zt-team-range:focus-within{border-color:var(--td-brand-color);box-shadow:0 0 0 2px var(--td-brand-color-focus)}

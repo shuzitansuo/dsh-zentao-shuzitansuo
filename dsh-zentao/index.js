@@ -65,6 +65,7 @@ function filterTeamTasks(data, query = {}) {
   const pageSize = Math.min(500, Math.max(1, Number(query.pageSize) || 20));
   const page = Math.max(1, Number(query.page) || 1);
   const member = String(query.member || '');
+  const execution = String(query.execution || '');
   const status = String(query.status || '');
   const start = String(query.start || '');
   const end = String(query.end || '');
@@ -83,6 +84,7 @@ function filterTeamTasks(data, query = {}) {
 
   const base = tasks.filter((item) => {
     if (isClosedTab ? item.status !== 'closed' : item.status === 'closed') return false;
+    if (execution && String(item.executionId || '') !== execution) return false;
     if (member === '__unknown__') {
       if (accountOf(item)) return false;
     } else if (member && accountOf(item) !== member) return false;
@@ -145,6 +147,18 @@ function filterTeamTasks(data, query = {}) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, pageCount);
   const rows = list.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const executionMap = new Map();
+  for (const item of tasks) {
+    const id = String(item.executionId || '');
+    if (!id || (isClosedTab ? item.status !== 'closed' : item.status === 'closed')) continue;
+    if (!executionMap.has(id)) {
+      executionMap.set(id, {
+        id,
+        label: [item.projectName, item.executionName].filter(Boolean).join(' / ') || item.executionName || id,
+      });
+    }
+  }
+  const executions = [...executionMap.values()].sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN'));
   const openCount = tasks.filter((item) => item.status !== 'closed').length;
   const closedCount = tasks.filter((item) => item.status === 'closed').length;
   return {
@@ -155,6 +169,7 @@ function filterTeamTasks(data, query = {}) {
     total,
     rows,
     cards,
+    executions,
     members: Array.isArray(data && data.members) ? data.members : [],
     tabCounts: { open: openCount, closed: closedCount },
     updatedAt: data && data.updatedAt,
