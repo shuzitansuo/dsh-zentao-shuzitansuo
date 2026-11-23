@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.5';
+    const PLUGIN_VERSION = 'v0.2.6';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -3142,7 +3142,16 @@ window.__ModuleLoader__.load({
           label: tab === 'bug' ? '方案' : '阶段',
           className: 'zt-col-state',
           type: 'text',
-          value: (i) => (i.type === 'story' ? i.stage || i.statusText : i.resolution || i.statusText) || '',
+          value: (i) => (i.type === 'story' ? i.stage || i.statusText : i.type === 'bug' ? i.resolution : i.statusText) || '',
+        },
+        // BUG-only 状态 column: actual ZenTao BUG status, before 方案.
+        {
+          key: 'bugStatus',
+          label: '状态',
+          className: 'zt-col-bugstatus',
+          type: 'text',
+          virtual: true,
+          value: (i) => i.statusText || i.status || '',
         },
         // Story-only 状态 column (the actual ZenTao story status), rendered
         // before 阶段. Virtual: follows the 阶段 column and stays out of the
@@ -3218,6 +3227,7 @@ window.__ModuleLoader__.load({
         .map((key) => CORE_COLUMNS.find((column) => column.key === key))
         .filter(Boolean);
       const storyStateColumn = CORE_COLUMNS.find((column) => column.key === 'storyState');
+      const bugStatusColumn = CORE_COLUMNS.find((column) => column.key === 'bugStatus');
       const visibleColumns = !isCoreTab
         ? ACTIVE_COLUMNS
         : tab === 'story'
@@ -3226,14 +3236,20 @@ window.__ModuleLoader__.load({
               if (index < 0) return orderedColumns.concat([storyStateColumn]);
               return orderedColumns.slice(0, index).concat([storyStateColumn], orderedColumns.slice(index));
             })()
-          : orderedColumns;
+          : tab === 'bug'
+            ? (() => {
+                const index = orderedColumns.findIndex((column) => column.key === 'status');
+                if (index < 0) return orderedColumns.concat([bugStatusColumn]);
+                return orderedColumns.slice(0, index).concat([bugStatusColumn], orderedColumns.slice(index));
+              })()
+            : orderedColumns;
 
       const statusLabel = (item) =>
         (item.type === 'story'
           ? item.stage || item.statusText
           : item.type === 'task' || item.type === 'testtask'
             ? item.statusText
-            : item.resolution || item.statusText) || '—';
+            : item.resolution || '—') || '—';
       const renderCell = (item, key) => {
         if (key === 'id') return h('td', { key, className: 'zt-mono' }, item.id);
         if (key === 'title') {
@@ -3290,6 +3306,22 @@ window.__ModuleLoader__.load({
                 onClick: (event) => openCellEditor(item, 'module', event),
               },
               h('span', { className: 'zt-cell-text' }, item.moduleName || '未指定模块'),
+            ),
+          );
+        }
+        if (key === 'bugStatus') {
+          return h(
+            'td',
+            { key, className: 'zt-col-bugstatus' },
+            h(
+              'button',
+              {
+                className: 'zt-cell-action',
+                type: 'button',
+                title: '点击修改 BUG 状态',
+                onClick: (event) => openCellEditor(item, 'bugStatus', event),
+              },
+              h('span', { className: 'zt-tag zt-tag-' + statusTone(item.status) }, item.statusText || item.status || '—'),
             ),
           );
         }
@@ -3866,6 +3898,7 @@ window.__ModuleLoader__.load({
         if (editor.field === 'module') return String(editor.item.moduleName || '未指定模块');
         if (editor.field === 'priority') return editor.item.priority ? 'P' + editor.item.priority : '';
         if (editor.field === 'execution') return String(editor.item.executionName || '');
+        if (editor.field === 'bugStatus') return String(editor.item.statusText || editor.item.status || '');
         return editor.item.type === 'bug'
           ? editor.item.resolution || editor.item.statusText
           : editor.item.stage || editor.item.statusText;
@@ -3906,6 +3939,23 @@ window.__ModuleLoader__.load({
                 prev && prev.item === item && prev.field === field
                   ? Object.assign({}, prev, {
                       options: modules.map((module) => ({ value: module.value, label: module.label })),
+                      loading: false,
+                    })
+                  : prev,
+              );
+            })
+            .catch((error) => fail(error.message));
+          return;
+        }
+        if (item.type === 'bug' && field === 'bugStatus') {
+          api('/zentao/api/bug-status-options?id=' + item.id)
+            .then((data) => {
+              if (!data || !data.ok) throw new Error((data && data.error) || '读取 BUG 状态失败');
+              const options = data.options || [];
+              setCellEditor((prev) =>
+                prev && prev.item === item && prev.field === field
+                  ? Object.assign({}, prev, {
+                      options: options.map((option) => ({ value: option.key, label: option.label })),
                       loading: false,
                     })
                   : prev,
@@ -4073,6 +4123,13 @@ window.__ModuleLoader__.load({
               body: JSON.stringify({ id: editor.item.id, statusKey: option.value }),
             });
             if (!result.ok) throw new Error(result.error || '任务状态修改失败');
+          } else if (editor.field === 'bugStatus' && editor.item.type === 'bug') {
+            result = await api('/zentao/api/bug-status', {
+              method: 'POST',
+              headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+              body: JSON.stringify({ id: editor.item.id, statusKey: option.value }),
+            });
+            if (!result.ok) throw new Error(result.error || 'BUG 状态修改失败');
           } else if (editor.field === 'execution' && editor.item.type === 'task') {
             result = await api('/zentao/api/task-execution', {
               method: 'POST',
@@ -5909,6 +5966,8 @@ window.__ModuleLoader__.load({
                   ? '修改截止日期'
                   : cellEditor.field === 'execution'
                     ? '修改所属迭代'
+                  : cellEditor.field === 'bugStatus'
+                    ? '修改 BUG 状态'
                   : cellEditor.field === 'status' || cellEditor.field === 'storyStatus'
                     ? cellEditor.item.type === 'bug'
                       ? '修改方案'
@@ -7076,7 +7135,7 @@ window.__ModuleLoader__.load({
                         visibleColumns.map((column) =>
                           h('col', {
                             key: column.key,
-                            style: { width: (column.virtual ? colWidths[column.key] || 72 : colWidths[column.key] || 80) + 'px' },
+                            style: { width: (column.virtual ? colWidths[column.key] || (column.key === 'bugStatus' ? 86 : 72) : colWidths[column.key] || 80) + 'px' },
                           }),
                         ),
                       )
@@ -8531,6 +8590,7 @@ body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(-
 .zt-table th.zt-col-assignee,.zt-table td.zt-col-assignee{min-width:86px}
 .zt-table th.zt-col-state,.zt-table td.zt-col-state{min-width:86px}
 .zt-table th.zt-col-storystate,.zt-table td.zt-col-storystate{min-width:86px}
+.zt-table th.zt-col-bugstatus,.zt-table td.zt-col-bugstatus{min-width:86px;width:86px;white-space:nowrap}
 .zt-table th.zt-col-deadline,.zt-table td.zt-col-deadline{min-width:96px}
 .zt-table th.zt-col-date,.zt-table td.zt-col-date{min-width:96px}
 .zt-table th.zt-col-owner,.zt-table td.zt-col-owner{min-width:96px}

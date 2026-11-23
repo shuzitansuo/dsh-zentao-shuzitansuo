@@ -122,6 +122,8 @@ const TASK_STATUS_TEXT = {
   cancel: '已取消',
   closed: '已关闭',
 };
+const BUG_STATUS_TEXT = { active: '激活', resolved: '已解决', closed: '已关闭' };
+
 
 /** Form fields of a ZenTao HTML form page, keyed by input name. */
 function parseFormFields(html) {
@@ -560,6 +562,7 @@ export class ZenTaoClient {
         url: `/bug-view-${id}.html`,
       });
     }
+    await this.#enrichBugStatuses(out);
     await this.#enrichModules('bug', out);
     return out;
   }
@@ -1283,6 +1286,74 @@ export class ZenTaoClient {
     };
   }
 
+  async #enrichBugStatuses(rows) {
+    const pending = rows.filter((row) => !row.status);
+    if (!pending.length) return;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < pending.length) {
+        const row = pending[cursor];
+        cursor += 1;
+        const cacheKey = 'bug-status:' + row.id;
+        const cached = this.taskCache.get(cacheKey);
+        let status = cached && Date.now() - cached.at < 5 * 60 * 1000 ? cached.value : '';
+        if (!status) {
+          try {
+            const data = await this.#apiRequest('GET', `bugs/${row.id}`);
+            status = String((data && data.status) || '');
+            this.taskCache.set(cacheKey, { at: Date.now(), value: status });
+          } catch (error) {
+            status = '';
+          }
+        }
+        if (status) {
+          row.status = status;
+          row.statusText = BUG_STATUS_TEXT[status] || status;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, pending.length) }, () => worker()));
+  }
+
+  /** Actual BUG status (active/resolved/closed) from the REST detail endpoint. */
+  async bugStatusOptions(bugId) {
+    let current = '';
+    try {
+      const data = await this.#apiRequest('GET', `bugs/${Number(bugId)}`);
+      current = String(data && data.status || '');
+    } catch (error) {
+      current = '';
+    }
+    const options = ['active', 'resolved', 'closed'].map((key) => ({ key, label: BUG_STATUS_TEXT[key] || key }));
+    return { current, options };
+  }
+
+  /** Change the actual BUG status through ZenTao's workflow action pages. */
+  async setBugStatus(bugId, statusKey) {
+    const id = Number(bugId);
+    const key = String(statusKey || '');
+    let result;
+    if (key === 'resolved') {
+      result = await this.resolveBug(id, 'fixed');
+    } else if (key === 'closed' || key === 'active') {
+      const action = key === 'closed' ? 'close' : 'activate';
+      const pagePath = `/bug-${action}-${id}.html`;
+      const html = await this.#page(pagePath);
+      const form = parseFormFields(html);
+      form.status = key;
+      if (!('comment' in form)) form.comment = '';
+      const res = await this.post(pagePath, form);
+      const parsed = parseFormResponse(res, `bug-${action}`);
+      result = parsed && parsed.ok === false ? parsed : Object.assign({ ok: true, status: key }, parsed);
+    } else {
+      return { ok: false, error: '目标状态不存在' };
+    }
+    // The list enriches actual BUG status from the REST detail endpoint, so a
+    // successful transition must drop that cached value immediately.
+    if (result && result.ok) this.taskCache.delete('bug-status:' + id);
+    return result;
+  }
+
   async bugDetail(bugId) {
     const html = await this.#page(`/bug-view-${bugId}.html`);
     const title = stripHtml((html.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '').replace(/\s*-\s*[^-]*-\s*禅道\s*$/, '').trim();
@@ -1600,7 +1671,9 @@ export class ZenTaoClient {
     form.set('comment', comment);
     form.set('resolvedBuild', 'trunk');
     const res = await this.post(`/bug-resolve-${bugId}.html`, form);
-    return parseFormResponse(res, 'bug-resolve');
+    const result = parseFormResponse(res, 'bug-resolve');
+    if (result && result.ok) this.taskCache.delete('bug-status:' + Number(bugId));
+    return result;
   }
 
   /** Project status action: close|suspend|activate|start. */

@@ -1,5 +1,5 @@
 {
-  "version": "0.2.5",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.5.zip",
-  "notes": "任务页新增今天筛选；修复任务页刷新缓存；指派人列加宽；双栏收起时 Tab 偏移"
+  "version": "0.2.6",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.6.zip",
+  "notes": "BUG 列表新增「状态」列：显示禅道实际状态（激活/已解决/已关闭），点击可切换"
 }

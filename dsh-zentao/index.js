@@ -908,6 +908,30 @@ export function apply(ctx, config = {}) {
       return json(res, 200, { ok: true, meta: data, statusOptions: STATUS_OPTIONS });
     }
 
+    if (method === 'GET' && path === 'bug-status-options') {
+      const id = Number(url.searchParams.get('id') || 0);
+      if (!id) return json(res, 400, { ok: false, error: 'id required' });
+      try {
+        const data = await client.bugStatusOptions(id);
+        return json(res, 200, Object.assign({ ok: true }, data));
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'bug-status') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.setBugStatus(Number(body.id), String(body.statusKey || ''));
+        invalidate('items:');
+        invalidate('tree');
+        invalidate('exec:');
+        return json(res, 200, Object.assign({ ok: true }, result));
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
     if (method === 'GET' && path === 'status-options') {
       return json(res, 200, { ok: true, options: STATUS_OPTIONS });
     }
