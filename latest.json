@@ -1,5 +1,5 @@
 {
-  "version": "0.2.10",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.10.zip",
-  "notes": "修复今日待办提醒的「查看任务」跳转：进入全员任务并自动筛选当前登录用户未完成任务。"
+  "version": "0.2.11",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.11.zip",
+  "notes": "修复今日待办提醒的「查看任务」：真正触发全员任务筛选，并限制为当前登录用户未完成任务；同时修复筛选请求在加载中被丢弃的问题。"
 }

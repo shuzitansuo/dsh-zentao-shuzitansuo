@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.10';
+    const PLUGIN_VERSION = 'v0.2.11';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -57,8 +57,27 @@ window.__ModuleLoader__.load({
     const TODAY_REMINDER_KEY = 'dsh-zentao-today-reminder-v1';
     const TODAY_REMINDER_SEEN_KEY = 'dsh-zentao-today-reminder-seen-v1';
     const OPEN_TODAY_TASKS_EVENT = 'dsh-zentao-open-today-tasks';
+    const TODAY_TASKS_PENDING_KEY = '__dshZentaoTodayTasksPending';
     const todayReminderStore = { enabled: todayReminderEnabled(), listeners: new Set() };
     let pendingOpenTodayTasks = false;
+
+    function todayTasksPending() {
+      if (pendingOpenTodayTasks) return true;
+      try {
+        return Boolean(window[TODAY_TASKS_PENDING_KEY]);
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function setTodayTasksPending(value) {
+      pendingOpenTodayTasks = Boolean(value);
+      try {
+        window[TODAY_TASKS_PENDING_KEY] = Boolean(value);
+      } catch (error) {
+        /* window unavailable */
+      }
+    }
 
     function todayReminderEnabled() {
       try {
@@ -1017,7 +1036,7 @@ window.__ModuleLoader__.load({
       });
       const [items, setItems] = useState({ story: [], bug: [], task: [], testtask: [], report: [] });
       // 每次打开软件默认进入仪表盘；从今日待办提醒进入时直接落到「全员任务」。
-      const initialReminder = pendingOpenTodayTasks;
+      const initialReminder = todayTasksPending();
       const [view, setView] = useState(() => (initialReminder ? 'team' : 'dashboard'));
       const [teamTasks, setTeamTasks] = useState({ loading: false, error: '', tasks: [], members: [], executions: [], loaded: false });
       const [teamFilters, setTeamFilters] = useState(() =>
@@ -1034,21 +1053,22 @@ window.__ModuleLoader__.load({
       const [teamTab, setTeamTab] = useState('open');
       useEffect(() => {
         const applyTodayTasks = (account) => {
-          setView('team');
-          setTeamTab('open');
-          setTeamFilters((prev) => ({
-            ...prev,
+          const next = {
             member: account || '',
             execution: '',
             status: '__todo__',
             start: '',
             end: '',
             q: '',
-          }));
+          };
+          setView('team');
+          setTeamTab('open');
+          setTeamFilters(next);
           setTeamPage(1);
+          loadTeamTasks(false, { tab: 'open', filters: next, page: 1, sort: teamSort, pageSize: teamPageSize });
         };
         const openTodayTasks = () => {
-          pendingOpenTodayTasks = false;
+          setTodayTasksPending(false);
           if (me.account) {
             applyTodayTasks(me.account);
             return;
@@ -1059,11 +1079,19 @@ window.__ModuleLoader__.load({
         };
         window.addEventListener(OPEN_TODAY_TASKS_EVENT, openTodayTasks);
         return () => window.removeEventListener(OPEN_TODAY_TASKS_EVENT, openTodayTasks);
-      }, [me.account]);
+      }, [me.account, teamSort, teamPageSize]);
       useEffect(() => {
-        if (!initialReminder) return;
-        pendingOpenTodayTasks = false;
-        const apply = (account) => setTeamFilters((prev) => ({ ...prev, member: account || '', status: '__todo__' }));
+        if (!initialReminder && !todayTasksPending()) return;
+        setTodayTasksPending(false);
+        const next = { member: me.account || '', execution: '', status: '__todo__', start: '', end: '', q: '' };
+        const apply = (account) => {
+          const filters = Object.assign({}, next, { member: account || '' });
+          setView('team');
+          setTeamTab('open');
+          setTeamFilters(filters);
+          setTeamPage(1);
+          loadTeamTasks(false, { tab: 'open', filters, page: 1, sort: teamSort, pageSize: teamPageSize });
+        };
         if (me.account) {
           apply(me.account);
           return;
@@ -1098,6 +1126,7 @@ window.__ModuleLoader__.load({
       const dashboardSeqRef = useRef(0);
       const dashboardFreshAtRef = useRef(0);
       const teamBusyRef = useRef(false);
+      const teamPendingRef = useRef(null);
       const teamSeqRef = useRef(0);
       const teamFreshAtRef = useRef(0);
       const [teamColWidths, setTeamColWidths] = useState(() => {
@@ -2564,7 +2593,12 @@ window.__ModuleLoader__.load({
         const sort = options.sort || (tab === 'closed' ? closedSort : teamSort);
         const page = options.page !== undefined ? options.page : tab === 'closed' ? closedPage : teamPage;
         const pageSize = options.pageSize !== undefined ? options.pageSize : tab === 'closed' ? closedPageSize : teamPageSize;
-        if (teamBusyRef.current) return;
+        if (teamBusyRef.current) {
+          // Keep the latest requested filter/page instead of silently dropping it
+          // while the previous request is still in flight.
+          teamPendingRef.current = { fresh, options };
+          return;
+        }
         if (fresh && !options.force && Date.now() - teamFreshAtRef.current < 3000) return;
         if (fresh) teamFreshAtRef.current = Date.now();
         const seq = ++teamSeqRef.current;
@@ -2612,7 +2646,12 @@ window.__ModuleLoader__.load({
           }
         } finally {
           clearTimeout(timer);
-          if (seq === teamSeqRef.current) teamBusyRef.current = false;
+          if (seq === teamSeqRef.current) {
+            teamBusyRef.current = false;
+            const pending = teamPendingRef.current;
+            teamPendingRef.current = null;
+            if (pending) loadTeamTasks(pending.fresh, pending.options);
+          }
         }
       };
 
@@ -9403,7 +9442,7 @@ body[data-ds-dark-theme] .zt-root .zt-assign-toast-head{color:#f0d9a8}
       };
       const openTasks = () => {
         setVisible(false);
-        pendingOpenTodayTasks = true;
+        setTodayTasksPending(true);
         window.dispatchEvent(new Event(OPEN_TODAY_TASKS_EVENT));
         const layout = typeof props.layout === 'function' ? props.layout() : null;
         if (layout && typeof layout.selectPanel === 'function') layout.selectPanel('zentao');
