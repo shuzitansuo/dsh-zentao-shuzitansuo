@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.8';
+    const PLUGIN_VERSION = 'v0.2.9';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -50,6 +50,65 @@ window.__ModuleLoader__.load({
       } catch (error) {
         /* ignore */
       }
+    }
+
+    // Startup "today's todos" reminder. It lives in the root overlay slot, so
+    // it appears even when the workbench panel has never been opened.
+    const TODAY_REMINDER_KEY = 'dsh-zentao-today-reminder-v1';
+    const TODAY_REMINDER_SEEN_KEY = 'dsh-zentao-today-reminder-seen-v1';
+    const OPEN_TODAY_TASKS_EVENT = 'dsh-zentao-open-today-tasks';
+    const todayReminderStore = { enabled: todayReminderEnabled(), listeners: new Set() };
+    let pendingOpenTodayTasks = false;
+
+    function todayReminderEnabled() {
+      try {
+        return localStorage.getItem(TODAY_REMINDER_KEY) !== 'off';
+      } catch (error) {
+        return true;
+      }
+    }
+
+    function setTodayReminderEnabled(enabled) {
+      todayReminderStore.enabled = Boolean(enabled);
+      try {
+        localStorage.setItem(TODAY_REMINDER_KEY, enabled ? 'on' : 'off');
+      } catch (error) {
+        /* ignore */
+      }
+      for (const listener of todayReminderStore.listeners) listener(todayReminderStore.enabled);
+    }
+
+    function subscribeTodayReminder(listener) {
+      todayReminderStore.listeners.add(listener);
+      listener(todayReminderStore.enabled);
+      return () => todayReminderStore.listeners.delete(listener);
+    }
+
+    function todayReminderSeen() {
+      try {
+        return sessionStorage.getItem(TODAY_REMINDER_SEEN_KEY) === '1';
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function markTodayReminderSeen() {
+      try {
+        sessionStorage.setItem(TODAY_REMINDER_SEEN_KEY, '1');
+      } catch (error) {
+        /* ignore */
+      }
+    }
+
+    function localDateKey(date) {
+      const value = date || new Date();
+      return (
+        value.getFullYear() +
+        '-' +
+        String(value.getMonth() + 1).padStart(2, '0') +
+        '-' +
+        String(value.getDate()).padStart(2, '0')
+      );
     }
 
     function applyAssignmentSnapshot(data) {
@@ -957,8 +1016,14 @@ window.__ModuleLoader__.load({
         }
       });
       const [items, setItems] = useState({ story: [], bug: [], task: [], testtask: [], report: [] });
-      // 每次打开软件默认进入仪表盘；会话内可切到列表。
-      const [view, setView] = useState('dashboard');
+      // 每次打开软件默认进入仪表盘；从今日待办提醒进入时直接落到任务列表。
+      const [view, setView] = useState(() => {
+        if (pendingOpenTodayTasks) {
+          pendingOpenTodayTasks = false;
+          return 'list';
+        }
+        return 'dashboard';
+      });
       const [teamTasks, setTeamTasks] = useState({ loading: false, error: '', tasks: [], members: [], executions: [], loaded: false });
       const [teamFilters, setTeamFilters] = useState({ member: '', execution: '', status: '', start: '', end: '', q: '' });
       const [teamSort, setTeamSort] = useState({ key: 'deadline', dir: 1 });
@@ -967,6 +1032,14 @@ window.__ModuleLoader__.load({
       const [teamExporting, setTeamExporting] = useState(false);
       const [teamSelected, setTeamSelected] = useState([]);
       const [teamBulkBusy, setTeamBulkBusy] = useState(false);
+      useEffect(() => {
+        const openTodayTasks = () => {
+          pendingOpenTodayTasks = false;
+          setView('list');
+        };
+        window.addEventListener(OPEN_TODAY_TASKS_EVENT, openTodayTasks);
+        return () => window.removeEventListener(OPEN_TODAY_TASKS_EVENT, openTodayTasks);
+      }, []);
       const [teamTab, setTeamTab] = useState('open');
       const [closedFilters, setClosedFilters] = useState({ member: '', execution: '', start: '', end: '', q: '' });
       const [closedSort, setClosedSort] = useState({ key: 'resolvedDate', dir: 1 });
@@ -1155,6 +1228,7 @@ window.__ModuleLoader__.load({
       const [editingTitle, setEditingTitle] = useState('');
       const copiedTimerRef = useRef(null);
       const [assignToastOn, setAssignToastOn] = useState(assignToastEnabled);
+      const [todayReminderOn, setTodayReminderOn] = useState(todayReminderEnabled);
       const assignNotifiedRef = useRef(null);
       const [iterationOptions, setIterationOptions] = useState(null);
       const [iterationLoading, setIterationLoading] = useState(false);
@@ -3481,7 +3555,7 @@ window.__ModuleLoader__.load({
                 title: '点击修改 BUG 状态',
                 onClick: (event) => openCellEditor(item, 'bugStatus', event),
               },
-              h('span', { className: 'zt-tag zt-tag-' + statusTone(item.status) }, item.statusText || item.status || '—'),
+              h('span', { className: 'zt-today-tag zt-today-tag-' + statusTone(item.status) }, item.statusText || item.status || '—'),
             ),
           );
         }
@@ -6151,7 +6225,7 @@ window.__ModuleLoader__.load({
                           h(
                             'td',
                             { className: 'zt-cell-editable', title: '点击修改状态', onClick: (event) => openCellEditor(item, 'status', event) },
-                            h('span', { className: 'zt-tag zt-tag-' + statusTone(item.status) }, item.statusText || item.status || '—'),
+                            h('span', { className: 'zt-today-tag zt-today-tag-' + statusTone(item.status) }, item.statusText || item.status || '—'),
                           ),
                           h(
                             'td',
@@ -6811,6 +6885,33 @@ window.__ModuleLoader__.load({
                             [...new Set([settingsForm.deepseekModel, ...modelInfo.models].filter(Boolean))].map((model) =>
                               h('option', { key: model, value: model }, model),
                             ),
+                          ),
+                        ),
+                        h('div', { key: 'reminder-title', className: 'zt-modal-section' }, '提醒'),
+                        h(
+                          'div',
+                          { key: 'reminder', className: 'zt-setting-row' },
+                          h(
+                            'div',
+                            { className: 'zt-setting-copy' },
+                            h('div', { className: 'zt-setting-label' }, '启动时提醒今日待办'),
+                            h('div', { className: 'zt-setting-desc' }, '打开 DSH 后，在右下角提示今天到期或已逾期的未完成任务。'),
+                          ),
+                          h(
+                            'button',
+                            {
+                              className: 'zt-switch' + (todayReminderOn ? ' zt-switch-on' : ''),
+                              type: 'button',
+                              role: 'switch',
+                              'aria-checked': todayReminderOn ? 'true' : 'false',
+                              title: todayReminderOn ? '关闭今日待办提醒' : '开启今日待办提醒',
+                              onClick: () => {
+                                const next = !todayReminderOn;
+                                setTodayReminderOn(next);
+                                setTodayReminderEnabled(next);
+                              },
+                            },
+                            h('span', { className: 'zt-switch-handle', 'aria-hidden': true }),
                           ),
                         ),
                         settingsError ? h('div', { key: 'err', className: 'zt-field-error' }, settingsError) : null,
@@ -8478,6 +8579,10 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-tree-search-input{flex:1 1 auto;min-width:0;height:24px;border:0;background:transparent;color:var(--td-text-color-primary);font:var(--td-font-body-medium);outline:none;padding:0}
 .zt-tree-search-input::placeholder{color:var(--td-text-color-placeholder)}
 .zt-tree-search-input::-webkit-search-cancel-button,.zt-tree-search-input::-webkit-search-decoration{-webkit-appearance:none;appearance:none}
+.zt-setting-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:11px 0;border-top:1px solid var(--td-component-border)}
+.zt-setting-copy{min-width:0}
+.zt-setting-label{font:var(--td-font-body-medium);font-weight:500;color:var(--td-text-color-primary)}
+.zt-setting-desc{margin-top:3px;font-size:12px;line-height:1.5;color:var(--td-text-color-secondary)}
 .zt-switch{position:relative;display:inline-flex;align-items:center;height:20px;min-width:32px;flex:0 0 auto;padding:0;border:0;border-radius:var(--td-radius-round,999px);background:var(--td-bg-color-component);cursor:pointer;transition:background-color .2s cubic-bezier(.38,0,.24,1)}
 .zt-switch:hover{background:var(--td-bg-color-component-hover)}
 .zt-switch-handle{position:absolute;left:4px;top:4px;width:12px;height:12px;border-radius:50%;background:#fff;box-shadow:var(--td-shadow-1);transition:left .2s cubic-bezier(.38,0,.24,1)}
@@ -9173,6 +9278,176 @@ body[data-ds-dark-theme] .zt-root .zt-assign-toast-head{color:#f0d9a8}
 .zt-tree::-webkit-scrollbar-track,.zt-table-wrap::-webkit-scrollbar-track,.zt-chat::-webkit-scrollbar-track,.zt-input::-webkit-scrollbar-track{background:transparent}
 `;
 
+    const TODAY_REMINDER_CSS = `
+.zt-today-reminder{position:absolute;right:24px;bottom:24px;z-index:30;display:flex;flex-direction:column;width:min(370px,calc(100vw - 32px));max-height:min(500px,calc(100vh - 48px));box-sizing:border-box;overflow:hidden;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-base,#fff));border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:var(--dsw-radius-md,12px);box-shadow:var(--dsw-elevation-panel,0 4px 16px rgba(0,0,0,.1));color:var(--dsw-alias-label-primary,#0f0f0f);font:var(--dsw-font-s-14,14px/22px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif);animation:zt-reminder-in .18s ease-out}
+@keyframes zt-reminder-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.zt-today-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:14px 12px 10px 16px}
+.zt-today-heading{display:flex;align-items:flex-start;gap:10px;min-width:0}
+.zt-today-icon{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:30px;height:30px;border-radius:8px;background:var(--dsw-alias-state-business-tertiary,#e4edfd);color:var(--dsw-alias-state-business-primary,#4176e6)}
+.zt-today-title{font-size:14px;font-weight:600;line-height:20px;color:var(--dsw-alias-label-primary,#0f0f0f)}
+.zt-today-summary{margin-top:2px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#545557)}
+.zt-today-close{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:26px;height:26px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#81858c);cursor:pointer}
+.zt-today-close:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.06));color:var(--dsw-alias-label-primary,#0f0f0f)}
+.zt-today-list{overflow:auto;max-height:280px;border-top:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06))}
+.zt-today-item{display:flex;flex-direction:column;gap:5px;width:100%;box-sizing:border-box;padding:10px 16px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06));background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.zt-today-item:last-child{border-bottom:0}
+.zt-today-item:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.zt-today-task{display:-webkit-box;overflow:hidden;font-size:13px;line-height:1.45;color:var(--dsw-alias-label-primary,#0f0f0f);-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.zt-today-meta{display:flex;align-items:center;gap:8px}
+.zt-today-due{font-size:12px;color:var(--dsw-alias-label-secondary,#545557)}
+.zt-today-overdue{color:var(--dsw-alias-state-error-primary,#ec1313);font-weight:500}
+.zt-today-tag{display:inline-flex;align-items:center;height:20px;box-sizing:border-box;padding:0 7px;border:1px solid transparent;border-radius:999px;font-size:11px;line-height:18px;white-space:nowrap}
+.zt-today-tag-default{background:var(--dsw-alias-markdown-tag,#f5f6f7);border-color:var(--dsw-alias-border-l1,rgba(0,0,0,.06));color:var(--dsw-alias-label-secondary,#545557)}
+.zt-today-tag-primary{background:var(--dsw-alias-state-business-tertiary,#e4edfd);color:var(--dsw-alias-state-business-primary,#4176e6)}
+.zt-today-tag-success{background:var(--dsw-alias-state-success-tertiary,#e6faed);color:var(--dsw-alias-state-success-primary,#22c55e)}
+.zt-today-tag-warning{background:var(--dsw-alias-state-warn-tertiary,#fef5e7);color:var(--dsw-alias-state-warn-label,#dd8629)}
+.zt-today-tag-error{background:var(--dsw-alias-state-error-secondary,#f25a5a33);color:var(--dsw-alias-state-error-primary,#ec1313)}
+.zt-today-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px 12px 16px;border-top:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06))}
+.zt-today-total{font-size:12px;color:var(--dsw-alias-label-secondary,#545557)}
+.zt-today-actions{display:flex;gap:8px}
+.zt-today-btn{display:inline-flex;align-items:center;justify-content:center;height:28px;padding:0 12px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,#545557);font:inherit;font-size:12px;cursor:pointer}
+.zt-today-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04));color:var(--dsw-alias-label-primary,#0f0f0f)}
+.zt-today-btn-primary{border-color:transparent;background:var(--dsw-alias-button-primary-fill,#0f0f0f);color:var(--dsw-alias-label-primary-foreground,#fff)}
+.zt-today-btn-primary:hover{background:var(--dsw-alias-button-primary-hover,#3c3c3d);color:var(--dsw-alias-label-primary-foreground,#fff)}
+`;
+
+    function TodayReminder(props) {
+      const [enabled, setEnabled] = useState(todayReminderEnabled);
+      const [visible, setVisible] = useState(false);
+      const [tasks, setTasks] = useState([]);
+      const [todayCount, setTodayCount] = useState(0);
+      const [overdueCount, setOverdueCount] = useState(0);
+      const snoozeTimer = useRef(null);
+
+      useEffect(() => subscribeTodayReminder(setEnabled), []);
+      useEffect(() => () => clearTimeout(snoozeTimer.current), []);
+
+      useEffect(() => {
+        if (!enabled) {
+          setVisible(false);
+          return undefined;
+        }
+        if (todayReminderSeen()) return undefined;
+        let alive = true;
+        api('/zentao/api/my-tasks')
+          .then((data) => {
+            if (!alive) return;
+            const today = localDateKey();
+            const items = (Array.isArray(data.tasks) ? data.tasks : [])
+              .filter((item) => {
+                const deadline = String(item.deadline || '');
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(deadline) || deadline > today) return false;
+                if (item.done || item.status === 'closed' || item.status === 'cancel') return false;
+                return true;
+              })
+              .sort(
+                (a, b) =>
+                  String(a.deadline).localeCompare(String(b.deadline)) ||
+                  String(a.title || '').localeCompare(String(b.title || '')),
+              );
+            markTodayReminderSeen();
+            if (!items.length) return;
+            setTasks(items);
+            setTodayCount(items.filter((item) => item.deadline === today).length);
+            setOverdueCount(items.filter((item) => item.deadline < today).length);
+            setVisible(true);
+          })
+          .catch(() => {
+            /* not signed in / host older than this feature: stay silent */
+          });
+        return () => {
+          alive = false;
+        };
+      }, [enabled]);
+
+      if (!visible) return null;
+      const today = localDateKey();
+      const snooze = () => {
+        setVisible(false);
+        clearTimeout(snoozeTimer.current);
+        snoozeTimer.current = setTimeout(() => setVisible(true), 30 * 60 * 1000);
+      };
+      const openTasks = () => {
+        setVisible(false);
+        pendingOpenTodayTasks = true;
+        window.dispatchEvent(new Event(OPEN_TODAY_TASKS_EVENT));
+        const layout = typeof props.layout === 'function' ? props.layout() : null;
+        if (layout && typeof layout.selectPanel === 'function') layout.selectPanel('zentao');
+      };
+      const summary = overdueCount
+        ? '今天到期 ' + todayCount + ' 项 · 已逾期 ' + overdueCount + ' 项'
+        : '今天有 ' + todayCount + ' 项任务到期';
+      return h(
+        'div',
+        { className: 'zt-today-reminder', role: 'dialog', 'aria-label': '今日待办' },
+        h('style', { key: 'zt-today-style' }, TODAY_REMINDER_CSS),
+        h(
+          'div',
+          { className: 'zt-today-head' },
+          h(
+            'div',
+            { className: 'zt-today-heading' },
+            h('span', { className: 'zt-today-icon' }, h(GlyphIcon, { name: 'bell', size: 18 })),
+            h(
+              'div',
+              null,
+              h('div', { className: 'zt-today-title' }, '今日待办'),
+              h('div', { className: 'zt-today-summary' }, summary),
+            ),
+          ),
+          h(
+            'button',
+            {
+              className: 'zt-today-close',
+              type: 'button',
+              title: '关闭',
+              'aria-label': '关闭',
+              onClick: () => setVisible(false),
+            },
+            h(GlyphIcon, { name: 'close', size: 14 }),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'zt-today-list' },
+          tasks.map((item) =>
+            h(
+              'button',
+              {
+                key: item.id,
+                className: 'zt-today-item',
+                type: 'button',
+                title: '查看任务',
+                onClick: openTasks,
+              },
+              h('span', { className: 'zt-today-task' }, item.title || '任务 #' + item.id),
+              h(
+                'span',
+                { className: 'zt-today-meta' },
+                h('span', { className: 'zt-today-tag zt-today-tag-' + statusTone(item.status) }, item.statusText || item.status || '—'),
+                h(
+                  'span',
+                  { className: 'zt-today-due' + (item.deadline < today ? ' zt-today-overdue' : '') },
+                  item.deadline === today ? '今天' : '已逾期',
+                ),
+              ),
+            ),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'zt-today-foot' },
+          h('span', { className: 'zt-today-total' }, '共 ' + tasks.length + ' 项'),
+          h(
+            'div',
+            { className: 'zt-today-actions' },
+            h('button', { className: 'zt-today-btn', type: 'button', title: '30 分钟后再提醒', onClick: snooze }, '稍后提醒'),
+            h('button', { className: 'zt-today-btn zt-today-btn-primary', type: 'button', onClick: openTasks }, '查看任务'),
+          ),
+        ),
+      );
+    }
+
     function PanelButton(props) {
       // The sidebar owns the clickable button; this entry renders only the icon.
       const size = Number(props.size) || 18;
@@ -9217,6 +9492,15 @@ body[data-ds-dark-theme] .zt-root .zt-assign-toast-head{color:#f0d9a8}
           ctx.slots.inject('main', () =>
             ctx.slots.register({ name: 'main', key: 'zentao' }, (props) =>
               h(Workbench, Object.assign({}, props, { layout: layout() })),
+            ),
+          ),
+        );
+        // Root overlay: loaded with the page, so the reminder can appear even
+        // when the sidebar entry has never opened the workbench panel.
+        ctx.effect(() =>
+          ctx.slots.inject('shell.overlay', () =>
+            ctx.slots.register({ name: 'shell.overlay', id: 'zentao-today-reminder', order: 6 }, (props) =>
+              h(TodayReminder, Object.assign({}, props, { layout })),
             ),
           ),
         );

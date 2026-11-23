@@ -1,5 +1,5 @@
 {
-  "version": "0.2.8",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.8.zip",
-  "notes": "全员任务支持多选批量修改迭代、状态、指派人、截止完成时间；修复中文迭代名称创建时执行代号冲突的问题。"
+  "version": "0.2.9",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.9.zip",
+  "notes": "新增启动今日待办提醒：打开 DSH 后在右下角提示今天到期或已逾期的未完成任务，可在设置中关闭或稍后提醒。"
 }
