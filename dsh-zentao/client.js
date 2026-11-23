@@ -9365,7 +9365,9 @@ body[data-ds-dark-theme] .zt-root .zt-assign-toast-head{color:#f0d9a8}
       const snooze = () => {
         setVisible(false);
         clearTimeout(snoozeTimer.current);
-        snoozeTimer.current = setTimeout(() => setVisible(true), 30 * 60 * 1000);
+        snoozeTimer.current = setTimeout(() => {
+          if (todayReminderStore.enabled) setVisible(true);
+        }, 30 * 60 * 1000);
       };
       const openTasks = () => {
         setVisible(false);
