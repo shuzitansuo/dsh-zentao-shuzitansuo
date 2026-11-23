@@ -9,11 +9,67 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.11';
+    const PLUGIN_VERSION = 'v0.2.12';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
     const CONTEXT_LABEL = { project: '项目', execution: '迭代', story: '需求', bug: 'BUG' };
+
+    // Batch task creation: one pasted line per task. Iteration matching is
+    // deliberately local and deterministic (project/iteration name keywords),
+    // so the preview never sends anything before the user confirms it.
+    const BATCH_LINE_PREFIX = /^\s*(?:(?:\d+)[.、)）]|[-*•])\s*/;
+    const BATCH_KEYWORD_STOP = new Set(['项目', '系统', '平台', '迭代', '管理', '工作台', '任务', '开发', '测试']);
+    const batchNorm = (value) =>
+      String(value || '')
+        .toLowerCase()
+        .replace(/[\s/\\|,，、;；:：()（）【】\[\]「」<>《》\-—_·•]+/g, '');
+    const batchTokens = (value) =>
+      String(value || '')
+        .split(/[\s/\\|,，、;；:：()（）【】\[\]「」<>《》\-—_·•]+/)
+        .map(batchNorm)
+        .filter((token) => token.length >= 2 && !BATCH_KEYWORD_STOP.has(token));
+    function parseBatchTaskLines(text) {
+      return String(text || '')
+        .split(/\r?\n/)
+        .map((line) => line.replace(BATCH_LINE_PREFIX, '').trim())
+        .filter(Boolean);
+    }
+    function matchBatchIteration(title, iterations, fallbackId) {
+      const titleNorm = batchNorm(title);
+      const all = iterations || [];
+      const doing = all.filter((item) => item.status === 'doing');
+      // Default to an in-progress iteration; only fall back to pending ones
+      // when the project has no in-progress iteration at all.
+      const candidates = doing.length ? doing : all;
+      let best = null;
+      let bestScore = 0;
+      for (const item of candidates) {
+        const projectNorm = batchNorm(item.projectName);
+        const nameNorm = batchNorm(item.name);
+        let score = 0;
+        if (nameNorm && titleNorm.includes(nameNorm)) score += 24;
+        if (projectNorm && titleNorm.includes(projectNorm)) score += 16;
+        for (const token of batchTokens(item.projectName)) {
+          if (titleNorm.includes(token)) score += Math.min(12, token.length * 2);
+        }
+        for (const token of batchTokens(item.name)) {
+          if (titleNorm.includes(token)) score += Math.min(12, token.length * 2);
+        }
+        if (item.status === 'doing') score += 2;
+        if (score > bestScore) {
+          best = item;
+          bestScore = score;
+        }
+      }
+      if (best && bestScore >= 4) return { iteration: best, matched: true };
+      const fallback =
+        all.find((item) => String(item.id) === String(fallbackId) && item.status === 'doing') ||
+        doing[0] ||
+        all[0] ||
+        null;
+      return { iteration: fallback, matched: false };
+    }
 
     let seq = 0;
     const uid = (p) => (p || 'id') + '-' + Date.now().toString(36) + '-' + seq++;
@@ -2457,8 +2513,15 @@ window.__ModuleLoader__.load({
         })();
         setTaskModal({
           date: date || fallbackDate,
+          tab: 'single',
           title: '',
           description: '',
+          batchText: '',
+          batchAnalyzedText: '',
+          batchRows: [],
+          batchUsers: {},
+          batchAnalyzing: false,
+          batchProgress: '',
           deadline: date || fallbackDate,
           priority: '3',
           executionId: presetExecutionId ? String(presetExecutionId) : '',
@@ -2585,6 +2648,190 @@ window.__ModuleLoader__.load({
         } catch (error) {
           setTaskModal((prev) => (prev ? Object.assign({}, prev, { submitting: false, error: error.message }) : prev));
         }
+      };
+
+      const batchUsersFor = async (executionIds) => {
+        const result = {};
+        await Promise.all(
+          [...new Set((executionIds || []).map(String).filter(Boolean))].map(async (executionId) => {
+            try {
+              const res = await api('/zentao/api/iteration-users?executionId=' + executionId);
+              result[executionId] = (res && res.users) || [];
+            } catch (error) {
+              result[executionId] = [];
+            }
+          }),
+        );
+        return result;
+      };
+
+      const analyzeBatchTasks = async () => {
+        if (!taskModal || taskModal.batchAnalyzing) return;
+        const text = String(taskModal.batchText || '');
+        const lines = parseBatchTaskLines(text);
+        if (!lines.length) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { error: '请先粘贴任务标题，一行一个任务' }) : prev));
+          return;
+        }
+        if (lines.length > 100) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { error: '一次最多识别 100 条任务' }) : prev));
+          return;
+        }
+        const iterations = taskModal.iterations || [];
+        if (!iterations.length) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { error: '暂无可用迭代，请先刷新迭代列表' }) : prev));
+          return;
+        }
+        const fallbackId = taskModal.executionId || selection.executionId || '';
+        setTaskModal((prev) => (prev ? Object.assign({}, prev, { batchAnalyzing: true, error: '', batchRows: [], batchProgress: '' }) : prev));
+        const rows = lines.map((title) => {
+          const match = matchBatchIteration(title, iterations, fallbackId);
+          return {
+            key: uid('batch'),
+            title,
+            executionId: match.iteration ? String(match.iteration.id) : '',
+            projectId: match.iteration ? match.iteration.projectId : 0,
+            assignedTo: me.account || '',
+            deadline: taskModal.deadline || taskModal.date,
+            matched: match.matched,
+          };
+        });
+        const executionIds = rows.map((row) => row.executionId).filter(Boolean);
+        const users = await batchUsersFor(executionIds);
+        setTaskModal((prev) =>
+          prev
+            ? Object.assign({}, prev, {
+                batchAnalyzing: false,
+                batchAnalyzedText: text,
+                batchRows: rows,
+                batchUsers: Object.assign({}, prev.batchUsers, users),
+                error: rows.some((row) => !row.executionId) ? '部分任务没有可用迭代，请在下方选择迭代' : '',
+              })
+            : prev,
+        );
+      };
+
+      const updateBatchRow = (key, patch) =>
+        setTaskModal((prev) =>
+          prev
+            ? Object.assign({}, prev, {
+                batchRows: (prev.batchRows || []).map((row) => (row.key === key ? Object.assign({}, row, patch) : row)),
+                error: '',
+              })
+            : prev,
+        );
+
+      const changeBatchRowIteration = async (key, executionId) => {
+        const iteration = (taskModal.iterations || []).find((item) => String(item.id) === String(executionId));
+        updateBatchRow(key, {
+          executionId: String(executionId),
+          projectId: iteration ? iteration.projectId : 0,
+          assignedTo: me.account || '',
+          matched: false,
+          manual: true,
+        });
+        if (!executionId || (taskModal.batchUsers || {})[executionId]) return;
+        const users = await batchUsersFor([executionId]);
+        setTaskModal((prev) =>
+          prev
+            ? Object.assign({}, prev, { batchUsers: Object.assign({}, prev.batchUsers, users) })
+            : prev,
+        );
+      };
+
+      const removeBatchRow = (key) =>
+        setTaskModal((prev) =>
+          prev ? Object.assign({}, prev, { batchRows: (prev.batchRows || []).filter((row) => row.key !== key) }) : prev,
+        );
+
+      const submitBatchTasks = async () => {
+        if (!taskModal || taskModal.submitting || taskModal.batchAnalyzing) return;
+        const rows = taskModal.batchRows || [];
+        if (!rows.length) {
+          setTaskModal((prev) => (prev ? Object.assign({}, prev, { error: '请先点击「识别」生成任务预览' }) : prev));
+          return;
+        }
+        const invalid = rows.find(
+          (row) => !String(row.title || '').trim() || !row.executionId || !row.assignedTo || !row.deadline,
+        );
+        if (invalid) {
+          setTaskModal((prev) =>
+            prev
+              ? Object.assign({}, prev, {
+                  error: '请补全每条任务的标题、迭代、指派人和截止日期' + (invalid.title ? '：' + invalid.title : ''),
+                })
+              : prev,
+          );
+          return;
+        }
+        const total = rows.length;
+        let done = 0;
+        let cursor = 0;
+        const failures = [];
+        setTaskModal((prev) =>
+          prev ? Object.assign({}, prev, { submitting: true, batchProgress: '0/' + total, error: '' }) : prev,
+        );
+        const worker = async () => {
+          while (cursor < rows.length) {
+            const row = rows[cursor++];
+            try {
+              const iteration = (taskModal.iterations || []).find((item) => String(item.id) === String(row.executionId));
+              const res = await api('/zentao/api/task-create', {
+                method: 'POST',
+                headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+                body: JSON.stringify({
+                  title: String(row.title || '').trim(),
+                  description: '',
+                  assignedTo: row.assignedTo,
+                  priority: Number(taskModal.priority) || 3,
+                  deadline: row.deadline,
+                  executionId: Number(row.executionId),
+                  projectId: iteration ? iteration.projectId : Number(row.projectId) || 0,
+                  storyId: 0,
+                }),
+              });
+              if (!res || !res.ok) throw new Error((res && res.error) || '创建任务失败');
+            } catch (error) {
+              failures.push(Object.assign({}, row, { error: error.message }));
+            } finally {
+              done += 1;
+              setTaskModal((prev) =>
+                prev ? Object.assign({}, prev, { batchProgress: done + '/' + total }) : prev,
+              );
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(3, total) }, () => worker()));
+        if (!failures.length) {
+          setTaskModal(null);
+          loadMyTasks(true);
+          loadDashboard(true);
+          if (view === 'team') loadTeamTasks(true, { force: true });
+          if (selection.executionId && rows.some((row) => String(row.executionId) === String(selection.executionId))) {
+            loadItems(selection.executionId, true);
+          }
+          return;
+        }
+        const failedText = failures.map((row) => row.title).join('\n');
+        setTaskModal((prev) =>
+          prev
+            ? Object.assign({}, prev, {
+                submitting: false,
+                batchProgress: '',
+                batchRows: failures,
+                batchText: failedText,
+                batchAnalyzedText: failedText,
+                error:
+                  '已创建 ' +
+                  (total - failures.length) +
+                  ' 条，失败 ' +
+                  failures.length +
+                  ' 条：' +
+                  failures[0].error +
+                  '（仅保留失败条目，可直接再次确认重试）',
+              })
+            : prev,
+        );
       };
 
       const loadTeamTasks = async (fresh = false, options = {}) => {
@@ -4992,6 +5239,170 @@ window.__ModuleLoader__.load({
                 ),
               ]
             : [];
+        const renderBatchTaskBody = () => {
+          const rows = taskModal.batchRows || [];
+          const lineCount = parseBatchTaskLines(taskModal.batchText).length;
+          return h(
+            React.Fragment,
+            null,
+            h(
+              'label',
+              { className: 'zt-field' },
+              fieldLabel('任务标题（一行一个）', true),
+              h('textarea', {
+                className: 'zt-textarea zt-batch-textarea',
+                rows: 7,
+                value: taskModal.batchText || '',
+                placeholder: '粘贴多条任务，一行一个任务标题\n例如：\n登录页增加短信验证码\n优化支付回调日志\n补充用户导出权限校验',
+                onChange: (event) =>
+                  setTaskModal((prev) =>
+                    prev
+                      ? Object.assign({}, prev, {
+                          batchText: event.target.value,
+                          batchAnalyzedText: '',
+                          batchRows: [],
+                          error: '',
+                        })
+                      : prev,
+                  ),
+              }),
+            ),
+            h(
+              'div',
+              { className: 'zt-batch-toolbar' },
+              h(
+                'span',
+                { className: 'zt-batch-count' },
+                lineCount ? '共 ' + lineCount + ' 行' : '每行一个任务',
+                rows.length ? ' · 已识别 ' + rows.length + ' 条' : '',
+              ),
+              h(
+                'button',
+                {
+                  className: 'zt-btn zt-btn-primary zt-batch-identify',
+                  type: 'button',
+                  disabled: taskModal.batchAnalyzing || !lineCount,
+                  onClick: analyzeBatchTasks,
+                },
+                taskModal.batchAnalyzing ? '识别中…' : '识别',
+              ),
+            ),
+            h(
+              'div',
+              { className: 'zt-batch-hint' },
+              '识别后会按标题中的项目/迭代关键词匹配进行中的迭代；识别结果可逐条修改迭代、指派人和截止日期。',
+            ),
+            taskModal.error ? h('div', { className: 'zt-field-error' }, taskModal.error) : null,
+            rows.length
+              ? h(
+                  'div',
+                  { className: 'zt-batch-result' },
+                  h(
+                    'div',
+                    { className: 'zt-batch-result-head' },
+                    h('span', { className: 'zt-batch-result-title' }, '待确认任务'),
+                    h(
+                      'span',
+                      { className: 'zt-batch-result-sub' },
+                      rows.filter((row) => row.matched).length + ' 条关键词匹配 · ' + rows.length + ' 条待创建',
+                    ),
+                  ),
+                  h(
+                    'div',
+                    { className: 'zt-batch-list' },
+                    rows.map((row, index) => {
+                      const users = (taskModal.batchUsers || {})[row.executionId] || [];
+                      const options = users.slice();
+                      if (row.assignedTo && !options.some((user) => user.value === row.assignedTo)) {
+                        options.push({
+                          value: row.assignedTo,
+                          label: row.assignedTo === me.account ? me.realname || row.assignedTo : row.assignedTo,
+                        });
+                      }
+                      return h(
+                        'div',
+                        { key: row.key, className: 'zt-batch-row' },
+                        h(
+                          'div',
+                          { className: 'zt-batch-row-head' },
+                          h('span', { className: 'zt-batch-index' }, String(index + 1).padStart(2, '0')),
+                          h('span', { className: 'zt-batch-title', title: row.title }, row.title),
+                          h(
+                            'span',
+                            { className: 'zt-batch-match' + (row.matched ? ' zt-batch-match-hit' : '') },
+                            row.matched ? '已匹配' : row.manual ? '手动调整' : '默认迭代',
+                          ),
+                          h(
+                            'button',
+                            {
+                              className: 'zt-batch-remove',
+                              type: 'button',
+                              title: '移除这条任务',
+                              'aria-label': '移除这条任务',
+                              onClick: () => removeBatchRow(row.key),
+                            },
+                            h(GlyphIcon, { name: 'close', size: 14 }),
+                          ),
+                        ),
+                        h(
+                          'div',
+                          { className: 'zt-batch-controls' },
+                          h(
+                            'label',
+                            { className: 'zt-batch-control' },
+                            h('span', null, '迭代'),
+                            h(
+                              'select',
+                              {
+                                className: 'zt-input zt-batch-select',
+                                value: row.executionId,
+                                onChange: (event) => changeBatchRowIteration(row.key, event.target.value),
+                              },
+                              (taskModal.iterations || []).map((item) =>
+                                h(
+                                  'option',
+                                  { key: 'batch-iter-' + item.id, value: String(item.id) },
+                                  (item.projectName ? item.projectName + ' / ' : '') + item.name,
+                                ),
+                              ),
+                            ),
+                          ),
+                          h(
+                            'label',
+                            { className: 'zt-batch-control' },
+                            h('span', null, '指派人'),
+                            h(
+                              'select',
+                              {
+                                className: 'zt-input zt-batch-select',
+                                value: row.assignedTo || '',
+                                onChange: (event) => updateBatchRow(row.key, { assignedTo: event.target.value }),
+                              },
+                              h('option', { value: '' }, '请选择'),
+                              options.map((user) =>
+                                h('option', { key: 'batch-user-' + row.key + '-' + user.value, value: user.value }, user.label),
+                              ),
+                            ),
+                          ),
+                          h(
+                            'label',
+                            { className: 'zt-batch-control zt-batch-control-date' },
+                            h('span', null, '截止日期'),
+                            h('input', {
+                              className: 'zt-input',
+                              type: 'date',
+                              value: row.deadline || '',
+                              onChange: (event) => updateBatchRow(row.key, { deadline: event.target.value }),
+                            }),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                )
+              : null,
+          );
+        };
         return h(
           'dialog',
           {
@@ -5006,7 +5417,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             {
-              className: 'zt-modal',
+              className: 'zt-modal' + (taskModal.tab === 'batch' ? ' zt-modal-batch' : ''),
               role: 'dialog',
               'aria-modal': 'true',
               'aria-label': '新建任务',
@@ -5024,7 +5435,40 @@ window.__ModuleLoader__.load({
             ),
             h(
               'div',
-              { className: 'zt-modal-body', onClick: closeDropdowns },
+              { className: 'zt-task-modal-tabs', role: 'tablist', 'aria-label': '新建任务方式' },
+              h(
+                'button',
+                {
+                  className: 'zt-task-modal-tab' + (taskModal.tab !== 'batch' ? ' zt-task-modal-tab-active' : ''),
+                  type: 'button',
+                  role: 'tab',
+                  'aria-selected': taskModal.tab !== 'batch',
+                  onClick: () =>
+                    setTaskModal((prev) => (prev ? Object.assign({}, prev, { tab: 'single', error: '' }) : prev)),
+                },
+                '单任务',
+              ),
+              h(
+                'button',
+                {
+                  className: 'zt-task-modal-tab' + (taskModal.tab === 'batch' ? ' zt-task-modal-tab-active' : ''),
+                  type: 'button',
+                  role: 'tab',
+                  'aria-selected': taskModal.tab === 'batch',
+                  onClick: () =>
+                    setTaskModal((prev) => (prev ? Object.assign({}, prev, { tab: 'batch', error: '' }) : prev)),
+                },
+                '批量任务',
+              ),
+            ),
+            h(
+              'div',
+              { className: 'zt-modal-body' + (taskModal.tab === 'batch' ? ' zt-modal-body-batch' : ''), onClick: closeDropdowns },
+              taskModal.tab === 'batch'
+                ? renderBatchTaskBody()
+                : h(
+                    React.Fragment,
+                    null,
               h(
                 'label',
                 { className: 'zt-field' },
@@ -5305,16 +5749,30 @@ window.__ModuleLoader__.load({
                 }),
               ),
               taskModal.error ? h('div', { className: 'zt-field-error' }, taskModal.error) : null,
+                  ),
             ),
             h(
               'div',
               { className: 'zt-modal-foot' },
               h('button', { className: 'zt-btn zt-btn-ghost', type: 'button', onClick: () => setTaskModal(null) }, '取消'),
-              h(
-                'button',
-                { className: 'zt-btn zt-btn-primary', type: 'button', disabled: taskModal.submitting, onClick: submitTaskModal },
-                taskModal.submitting ? '创建中…' : '确定',
-              ),
+              taskModal.tab === 'batch'
+                ? h(
+                    'button',
+                    {
+                      className: 'zt-btn zt-btn-primary',
+                      type: 'button',
+                      disabled: taskModal.submitting || taskModal.batchAnalyzing || !(taskModal.batchRows || []).length,
+                      onClick: submitBatchTasks,
+                    },
+                    taskModal.submitting
+                      ? '创建中 ' + (taskModal.batchProgress || '') + '…'
+                      : '确认创建' + ((taskModal.batchRows || []).length ? '（' + taskModal.batchRows.length + ' 条）' : ''),
+                  )
+                : h(
+                    'button',
+                    { className: 'zt-btn zt-btn-primary', type: 'button', disabled: taskModal.submitting, onClick: submitTaskModal },
+                    taskModal.submitting ? '创建中…' : '确定',
+                  ),
             ),
           ),
         );
@@ -8786,14 +9244,15 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-team-overview-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px}
 .zt-team-overview-title{font-size:13px;font-weight:600;color:var(--td-text-color-primary)}
 .zt-team-overview-hint{font-size:11px;color:var(--td-text-color-placeholder)}
-.zt-team-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;align-items:stretch}
-.zt-team-card{width:100%;max-width:360px;min-width:0;justify-self:start}
+.zt-team-cards{display:flex;flex-wrap:wrap;justify-content:flex-start;gap:12px;align-items:stretch}
+.zt-team-card{flex:0 1 180px;width:180px;max-width:100%;min-width:0}
 .zt-team-card{position:relative;display:flex;flex-direction:column;gap:6px;min-width:0;min-height:112px;padding:14px 18px 12px 20px;border:1px solid var(--td-component-stroke);border-radius:16px;background:var(--td-bg-color-container);box-shadow:0 2px 8px rgba(0,0,0,.06);transition:box-shadow .2s,border-color .2s,transform .2s}
 .zt-team-card::before{content:'';position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:0 3px 3px 0;background:var(--zt-card-accent,#2f7cf6)}
 .zt-team-card:hover{box-shadow:0 6px 16px rgba(0,0,0,.12);border-color:var(--td-border-level-2-color);transform:translateY(-1px)}
 .zt-team-card-name{font-size:13px;line-height:18px;color:var(--td-text-color-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.zt-team-card-metrics{display:flex;align-items:flex-end;gap:32px;margin-top:2px}
+.zt-team-card-metrics{display:flex;align-items:flex-end;justify-content:flex-start;gap:24px;margin-top:2px}
 .zt-team-card-metric{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:0;border:0;background:transparent;font:inherit;text-align:left;cursor:pointer;border-radius:4px}
+.zt-team-card > .zt-team-card-metric{width:100%;align-items:center}
 .zt-team-card-metric:hover .zt-team-card-value{text-decoration:underline}
 .zt-team-card-value{font-size:26px;line-height:32px;font-weight:600;color:var(--td-text-color-primary)}
 .zt-team-card-value-todo{color:#2f7cf6}
@@ -8950,6 +9409,35 @@ body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(-
 .zt-modal-close{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:transparent;color:var(--td-text-color-secondary);cursor:pointer}
 .zt-modal-close:hover{background:var(--td-bg-color-container-hover);color:var(--td-text-color-primary)}
 .zt-modal-body{padding:16px 24px 4px;display:flex;flex-direction:column;gap:16px;overflow:visible}
+.zt-modal.zt-modal-batch{width:760px}
+.zt-task-modal-tabs{display:flex;gap:4px;padding:10px 24px 0;margin-top:8px;border-bottom:1px solid var(--td-component-stroke)}
+.zt-task-modal-tab{position:relative;height:34px;padding:0 12px;border:0;background:transparent;color:var(--td-text-color-secondary);cursor:pointer;font:var(--td-font-body-medium);font-size:13px;white-space:nowrap}
+.zt-task-modal-tab:hover{color:var(--td-text-color-primary)}
+.zt-task-modal-tab-active{color:var(--td-brand-color);font-weight:600}
+.zt-task-modal-tab-active:after{content:'';position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px 2px 0 0;background:var(--td-brand-color)}
+.zt-modal-body-batch{padding-top:14px;gap:12px;max-height:calc(100vh - 238px);overflow:auto}
+.zt-batch-textarea{min-height:138px!important;resize:vertical}
+.zt-batch-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:-4px}
+.zt-batch-count{font-size:12px;color:var(--td-text-color-secondary)}
+.zt-batch-identify{height:30px;padding:0 18px}
+.zt-batch-hint{font-size:12px;line-height:18px;color:var(--td-text-color-placeholder);margin-top:-4px}
+.zt-batch-result{display:flex;flex-direction:column;gap:8px}
+.zt-batch-result-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:2px}
+.zt-batch-result-title{font-size:13px;font-weight:600;color:var(--td-text-color-primary)}
+.zt-batch-result-sub{font-size:12px;color:var(--td-text-color-secondary)}
+.zt-batch-list{display:flex;flex-direction:column;gap:8px}
+.zt-batch-row{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--td-component-stroke);border-radius:8px;background:var(--td-bg-color-container)}
+.zt-batch-row-head{display:flex;align-items:center;gap:8px;min-width:0}
+.zt-batch-index{font-size:11px;color:var(--td-text-color-placeholder);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.zt-batch-title{flex:1;min-width:0;font-size:13px;font-weight:500;color:var(--td-text-color-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.zt-batch-match{flex:0 0 auto;padding:1px 6px;border-radius:4px;background:var(--td-bg-color-secondarycontainer);color:var(--td-text-color-secondary);font-size:11px;line-height:16px}
+.zt-batch-match-hit{background:var(--td-success-color-light,#e8f8f0);color:var(--td-success-color,#2ba471)}
+.zt-batch-remove{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:transparent;color:var(--td-text-color-placeholder);cursor:pointer;flex:0 0 auto}
+.zt-batch-remove:hover{background:var(--td-bg-color-container-hover);color:var(--td-error-color,#d54941)}
+.zt-batch-controls{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) 132px;gap:8px}
+.zt-batch-control{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:11px;color:var(--td-text-color-secondary)}
+.zt-batch-control .zt-input{height:30px;min-height:30px;padding:0 8px;font-size:12px;line-height:28px}
+.zt-batch-control select.zt-input{appearance:auto;padding-right:24px}
 .zt-modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:20px 24px 24px}
 .zt-modal .zt-field{display:flex;flex-direction:column;align-items:stretch;gap:6px;text-align:left}
 .zt-modal .zt-field-label{display:flex;align-items:center;gap:2px;font-size:13px;line-height:20px;color:var(--td-text-color-primary);white-space:nowrap}

@@ -1,5 +1,5 @@
 {
-  "version": "0.2.11",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.11.zip",
-  "notes": "修复今日待办提醒的「查看任务」：真正触发全员任务筛选，并限制为当前登录用户未完成任务；同时修复筛选请求在加载中被丢弃的问题。"
+  "version": "0.2.12",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.12.zip",
+  "notes": "新增日历批量新建任务：粘贴多行标题后自动匹配进行中迭代，逐条调整迭代/指派人/截止日期后批量创建；同时优化全员任务总览卡片布局，批量任务识别按钮改为主色。"
 }
