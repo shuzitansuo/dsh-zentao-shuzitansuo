@@ -589,6 +589,55 @@ export function apply(ctx, config = {}) {
       }
     }
 
+    if (method === 'POST' && path === 'team-tasks/batch') {
+      let body;
+      try {
+        body = JSON.parse((await readBody(req)) || '{}');
+      } catch (error) {
+        return json(res, 400, { ok: false, error: '请求格式错误' });
+      }
+      const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map((id) => Number(id)).filter((id) => id > 0))];
+      if (!ids.length) return json(res, 400, { ok: false, error: '请先选择任务' });
+      const update = {};
+      if (body.executionId !== undefined) {
+        const executionId = Number(body.executionId);
+        if (!(executionId > 0)) return json(res, 400, { ok: false, error: '迭代不合法' });
+        update.executionId = executionId;
+      }
+      if (body.statusKey !== undefined) update.statusKey = String(body.statusKey || '');
+      if (body.assignedTo !== undefined) update.assignedTo = String(body.assignedTo || '');
+      if (body.deadline !== undefined) {
+        const deadline = String(body.deadline || '');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(deadline)) return json(res, 400, { ok: false, error: '截止日期格式应为 YYYY-MM-DD' });
+        update.deadline = deadline;
+      }
+      if (!Object.keys(update).length) return json(res, 400, { ok: false, error: '没有要修改的字段' });
+      const failed = [];
+      let updated = 0;
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < ids.length) {
+          const id = ids[cursor];
+          cursor += 1;
+          try {
+            if (update.executionId) await client.setTaskExecution(id, update.executionId);
+            if (update.statusKey) await client.changeTaskStatus(id, update.statusKey);
+            if (update.assignedTo) await client.assignTask(id, update.assignedTo);
+            if (update.deadline) await client.setTaskDeadline(id, update.deadline);
+            updated += 1;
+          } catch (error) {
+            failed.push({ id, error: error?.message || String(error) });
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, ids.length) }, () => worker()));
+      invalidate('items:');
+      invalidate('dashboard');
+      invalidate('my-tasks');
+      invalidateTeamTasks();
+      return json(res, 200, { ok: true, updated, failed });
+    }
+
     if (method === 'GET' && path === 'my-tasks') {
       try {
         const fresh = url.searchParams.get('fresh') === '1';

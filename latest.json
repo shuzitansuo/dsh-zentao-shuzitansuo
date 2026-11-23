@@ -1,5 +1,5 @@
 {
-  "version": "0.2.7",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.7.zip",
-  "notes": "全员任务筛选新增所属迭代筛选（未关闭 / 已关闭均支持）"
+  "version": "0.2.8",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.8.zip",
+  "notes": "全员任务支持多选批量修改迭代、状态、指派人、截止完成时间；修复中文迭代名称创建时执行代号冲突的问题。"
 }

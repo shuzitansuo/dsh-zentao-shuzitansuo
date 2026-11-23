@@ -104,13 +104,31 @@ function workingDays(begin, end) {
   return Math.max(1, count);
 }
 
-/** ZenTao requires a code; derive an ASCII-safe one from the name. */
+/** Short stable hash used to keep codes from names with a non-ASCII prefix apart. */
+function shortHash(value) {
+  let hash = 2166136261;
+  for (const char of String(value || '')) {
+    hash ^= char.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).slice(0, 5);
+}
+
+/** ZenTao requires a code; derive an ASCII-safe one from the name.
+ *
+ * A Chinese prefix is removed by the ASCII slug, so names such as
+ * 雄安-v0.0.1 and v0.0.1 both become "v0.0.1". Append a short hash when the
+ * original name had non-ASCII characters to keep the code unique without
+ * changing the visible iteration name. */
 function codeForName(name) {
-  const slug = String(name || '')
+  const raw = String(name || '');
+  const slug = raw
     .replace(/[^A-Za-z0-9._-]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
-  return slug || 'exec-' + todayIso().replace(/-/g, '');
+    .slice(0, 32);
+  const base = slug || 'exec-' + todayIso().replace(/-/g, '');
+  const suffix = /[^\x00-\x7F]/.test(raw) ? '-' + shortHash(raw) : '';
+  return (base + suffix).slice(0, 40);
 }
 
 /** ZenTao task status labels. */

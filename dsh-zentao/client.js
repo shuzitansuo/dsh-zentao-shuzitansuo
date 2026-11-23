@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.7';
+    const PLUGIN_VERSION = 'v0.2.8';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -965,6 +965,8 @@ window.__ModuleLoader__.load({
       const [teamPage, setTeamPage] = useState(1);
       const [teamPageSize, setTeamPageSize] = useState(20);
       const [teamExporting, setTeamExporting] = useState(false);
+      const [teamSelected, setTeamSelected] = useState([]);
+      const [teamBulkBusy, setTeamBulkBusy] = useState(false);
       const [teamTab, setTeamTab] = useState('open');
       const [closedFilters, setClosedFilters] = useState({ member: '', execution: '', start: '', end: '', q: '' });
       const [closedSort, setClosedSort] = useState({ key: 'resolvedDate', dir: 1 });
@@ -2461,6 +2463,7 @@ window.__ModuleLoader__.load({
         if (fresh) teamFreshAtRef.current = Date.now();
         const seq = ++teamSeqRef.current;
         teamBusyRef.current = true;
+        setTeamSelected([]);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 20000);
         setTeamTasks((prev) => Object.assign({}, prev, { loading: true, error: '' }));
@@ -2505,6 +2508,161 @@ window.__ModuleLoader__.load({
           clearTimeout(timer);
           if (seq === teamSeqRef.current) teamBusyRef.current = false;
         }
+      };
+
+      const toggleTeamSelect = (id, checked) =>
+        setTeamSelected((prev) => (checked ? (prev.includes(id) ? prev : prev.concat([id])) : prev.filter((value) => value !== id)));
+      const toggleTeamPageSelect = (ids, checked) =>
+        setTeamSelected((prev) => (checked ? [...new Set(prev.concat(ids))] : prev.filter((value) => !ids.includes(value))));
+
+      const applyTeamBulk = async (patch) => {
+        if (!teamSelected.length || teamBulkBusy) return;
+        setTeamBulkBusy(true);
+        setActionError('');
+        try {
+          let res;
+          try {
+            res = await api('/zentao/api/team-tasks/batch', {
+              method: 'POST',
+              headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+              body: JSON.stringify(Object.assign({ ids: teamSelected }, patch)),
+            });
+          } catch (batchError) {
+            // Keep working on a host that has not picked up the batch route yet.
+            if (!/HTTP\s*404|not found/i.test(batchError.message)) throw batchError;
+            const failed = [];
+            let updated = 0;
+            let cursor = 0;
+            const worker = async () => {
+              while (cursor < teamSelected.length) {
+                const id = teamSelected[cursor];
+                cursor += 1;
+                try {
+                  if (patch.executionId) {
+                    await api('/zentao/api/task-execution', {
+                      method: 'POST',
+                      headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+                      body: JSON.stringify({ id, executionId: patch.executionId }),
+                    });
+                  }
+                  if (patch.statusKey) {
+                    await api('/zentao/api/task-status', {
+                      method: 'POST',
+                      headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+                      body: JSON.stringify({ id, statusKey: patch.statusKey }),
+                    });
+                  }
+                  if (patch.assignedTo) {
+                    await api('/zentao/api/task-assignee', {
+                      method: 'POST',
+                      headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+                      body: JSON.stringify({ id, assignedTo: patch.assignedTo }),
+                    });
+                  }
+                  if (patch.deadline) {
+                    await api('/zentao/api/task-deadline', {
+                      method: 'POST',
+                      headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+                      body: JSON.stringify({ id, deadline: patch.deadline }),
+                    });
+                  }
+                  updated += 1;
+                } catch (error) {
+                  failed.push({ id, error: error.message });
+                }
+              }
+            };
+            await Promise.all(Array.from({ length: Math.min(4, teamSelected.length) }, () => worker()));
+            res = { ok: true, updated, failed };
+          }
+          if (!res || !res.ok) throw new Error((res && res.error) || '批量修改失败');
+          const failed = Array.isArray(res.failed) ? res.failed : [];
+          if (failed.length) {
+            setActionError('已更新 ' + res.updated + ' 个任务，' + failed.length + ' 个失败：' + failed[0].error);
+          } else {
+            setTeamSelected([]);
+          }
+          await loadTeamTasks(true, {
+            tab: teamTab,
+            filters: teamTab === 'closed' ? closedFilters : teamFilters,
+            page: teamTab === 'closed' ? closedPage : teamPage,
+            sort: teamTab === 'closed' ? closedSort : teamSort,
+            pageSize: teamTab === 'closed' ? closedPageSize : teamPageSize,
+            force: true,
+          });
+        } catch (error) {
+          setActionError(error.message);
+        } finally {
+          setTeamBulkBusy(false);
+        }
+      };
+
+      const renderTeamBulkBar = () => {
+        if (!teamSelected.length) return null;
+        const bulkSelect = (placeholder, field, options) =>
+          h(
+            'select',
+            {
+              className: 'zt-team-input zt-team-select zt-team-bulk-select',
+              value: '',
+              disabled: teamBulkBusy,
+              onChange: (event) => {
+                const value = event.target.value;
+                if (value) applyTeamBulk({ [field]: value });
+              },
+            },
+            h('option', { value: '' }, placeholder),
+            options.map((option) => h('option', { key: option.value, value: option.value }, option.label)),
+          );
+        return h(
+          'div',
+          { className: 'zt-team-bulk' },
+          h('span', { className: 'zt-team-bulk-count' }, '已选 ' + teamSelected.length + ' 项'),
+          bulkSelect(
+            '批量修改迭代',
+            'executionId',
+            (teamTasks.executions || []).map((execution) => ({ value: execution.id, label: execution.label })),
+          ),
+          bulkSelect('批量修改状态', 'statusKey', [
+            { value: 'wait', label: '未开始' },
+            { value: 'doing', label: '进行中' },
+            { value: 'done', label: '已完成' },
+            { value: 'pause', label: '已暂停' },
+            { value: 'cancel', label: '已取消' },
+            { value: 'closed', label: '已关闭' },
+          ]),
+          bulkSelect(
+            '批量修改指派人',
+            'assignedTo',
+            (teamTasks.members || []).map((member) => ({
+              value: member.account || member.label,
+              label: member.label,
+            })),
+          ),
+          h(
+            'label',
+            { className: 'zt-team-bulk-date', title: '批量修改截止完成时间' },
+            h('span', null, '截止时间'),
+            h('input', {
+              type: 'date',
+              className: 'zt-team-input',
+              disabled: teamBulkBusy,
+              onChange: (event) => {
+                if (event.target.value) applyTeamBulk({ deadline: event.target.value });
+              },
+            }),
+          ),
+          h(
+            'button',
+            {
+              className: 'zt-chip-btn',
+              type: 'button',
+              disabled: teamBulkBusy,
+              onClick: () => setTeamSelected([]),
+            },
+            '清空选择',
+          ),
+        );
       };
 
       useEffect(() => {
@@ -5342,6 +5500,8 @@ window.__ModuleLoader__.load({
         const total = teamTasks.total || 0;
         const page = teamTasks.page || 1;
         const pageCount = teamTasks.pageCount || 1;
+        const pageIds = rows.map((row) => row.id);
+        const allPageSelected = pageIds.length > 0 && pageIds.every((id) => teamSelected.includes(id));
         const patchFilters = (patch) => {
           const next = Object.assign({}, closedFilters, patch);
           setClosedFilters(next);
@@ -5407,10 +5567,11 @@ window.__ModuleLoader__.load({
           window.addEventListener('mousemove', move);
           window.addEventListener('mouseup', up);
         };
-        const th = (key, label, className) =>
+        const th = (key, label, className, leading) =>
           h(
             'th',
             { key, className: 'zt-team-th' + (className ? ' ' + className : '') + (closedSort.key === key ? ' zt-th-sorted' : '') },
+            leading || null,
             h(
               'button',
               { type: 'button', className: 'zt-th-btn', onClick: () => toggleSort(key) },
@@ -5546,6 +5707,7 @@ window.__ModuleLoader__.load({
             }),
             h('button', { className: 'zt-chip-btn', type: 'button', onClick: () => patchFilters({ member: '', execution: '', start: '', end: '', q: '' }) }, '清除筛选'),
           ),
+          renderTeamBulkBar(),
           h(
             'div',
             { className: 'zt-team-body' },
@@ -5559,6 +5721,7 @@ window.__ModuleLoader__.load({
                     h(
                       'colgroup',
                       null,
+                      h('col', { style: { width: '36px' } }),
                       CLOSED_COLUMNS.map((column) =>
                         h('col', {
                           key: column.key,
@@ -5577,6 +5740,20 @@ window.__ModuleLoader__.load({
                       h(
                         'tr',
                         null,
+                        h(
+                          'th',
+                          { className: 'zt-team-th zt-team-col-check' },
+                          h(
+                            'label',
+                            { className: 'zt-team-check', title: '全选当前页' },
+                            h('input', {
+                              type: 'checkbox',
+                              checked: allPageSelected,
+                              disabled: !rows.length || teamBulkBusy,
+                              onChange: (event) => toggleTeamPageSelect(pageIds, event.target.checked),
+                            }),
+                          ),
+                        ),
                         th('id', '任务ID', 'zt-team-col-id'),
                         th('title', '任务名称', 'zt-team-col-title'),
                         th('resolver', '解决人'),
@@ -5592,6 +5769,20 @@ window.__ModuleLoader__.load({
                         h(
                           'tr',
                           { key: item.id },
+                          h(
+                            'td',
+                            { className: 'zt-team-col-check' },
+                            h(
+                              'label',
+                              { className: 'zt-team-check', title: '选择该任务' },
+                              h('input', {
+                                type: 'checkbox',
+                                checked: teamSelected.includes(item.id),
+                                disabled: teamBulkBusy,
+                                onChange: (event) => toggleTeamSelect(item.id, event.target.checked),
+                              }),
+                            ),
+                          ),
                           h('td', { className: 'zt-team-col-id' }, String(item.id)),
                           h(
                             'td',
@@ -5632,6 +5823,8 @@ window.__ModuleLoader__.load({
         const total = teamTasks.total || 0;
         const page = teamTasks.page || 1;
         const pageCount = teamTasks.pageCount || 1;
+        const pageIds = rows.map((row) => row.id);
+        const allPageSelected = pageIds.length > 0 && pageIds.every((id) => teamSelected.includes(id));
         const patchFilters = (patch) => {
           const next = Object.assign({}, teamFilters, patch);
           setTeamFilters(next);
@@ -5697,10 +5890,11 @@ window.__ModuleLoader__.load({
           window.addEventListener('mousemove', move);
           window.addEventListener('mouseup', up);
         };
-        const th = (key, label, className) =>
+        const th = (key, label, className, leading) =>
           h(
             'th',
             { key, className: 'zt-team-th' + (className ? ' ' + className : '') + (teamSort.key === key ? ' zt-th-sorted' : '') },
+            leading || null,
             h(
               'button',
               { type: 'button', className: 'zt-th-btn', onClick: () => toggleSort(key) },
@@ -5861,6 +6055,7 @@ window.__ModuleLoader__.load({
             }),
             h('button', { className: 'zt-chip-btn', type: 'button', onClick: () => patchFilters({ member: '', execution: '', status: '', start: '', end: '', q: '' }) }, '清除筛选'),
           ),
+          renderTeamBulkBar(),
           h(
             'div',
             { className: 'zt-team-body' },
@@ -5874,6 +6069,7 @@ window.__ModuleLoader__.load({
                     h(
                       'colgroup',
                       null,
+                      h('col', { style: { width: '36px' } }),
                       TEAM_COLUMNS.map((column) =>
                         h('col', {
                           key: column.key,
@@ -5892,6 +6088,20 @@ window.__ModuleLoader__.load({
                       h(
                         'tr',
                         null,
+                        h(
+                          'th',
+                          { className: 'zt-team-th zt-team-col-check' },
+                          h(
+                            'label',
+                            { className: 'zt-team-check', title: '全选当前页' },
+                            h('input', {
+                              type: 'checkbox',
+                              checked: allPageSelected,
+                              disabled: !rows.length || teamBulkBusy,
+                              onChange: (event) => toggleTeamPageSelect(pageIds, event.target.checked),
+                            }),
+                          ),
+                        ),
                         th('id', 'ID', 'zt-team-col-id'),
                         th('title', '任务名称', 'zt-team-col-title'),
                         th('assignee', '指派人'),
@@ -5913,6 +6123,20 @@ window.__ModuleLoader__.load({
                         return h(
                           'tr',
                           { key: item.id },
+                          h(
+                            'td',
+                            { className: 'zt-team-col-check' },
+                            h(
+                              'label',
+                              { className: 'zt-team-check', title: '选择该任务' },
+                              h('input', {
+                                type: 'checkbox',
+                                checked: teamSelected.includes(item.id),
+                                disabled: teamBulkBusy,
+                                onChange: (event) => toggleTeamSelect(item.id, event.target.checked),
+                              }),
+                            ),
+                          ),
                           h('td', { className: 'zt-team-col-id' }, String(item.id)),
                           h(
                             'td',
@@ -8364,6 +8588,15 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-team-input:focus{border-color:var(--td-brand-color)}
 .zt-team-select{width:128px;flex:0 0 auto}
 .zt-team-execution-select{width:auto;min-width:144px;max-width:220px}
+.zt-team-col-check{width:36px;min-width:36px;max-width:36px;padding-left:12px!important;padding-right:0!important;text-align:center}
+.zt-team-check{display:inline-flex;align-items:center;justify-content:center;margin-right:6px;vertical-align:middle;cursor:pointer}
+.zt-team-check input{width:14px;height:14px;margin:0;accent-color:var(--td-brand-color);cursor:pointer}
+.zt-team-col-id{white-space:nowrap}
+.zt-team-bulk{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:8px 16px;border-bottom:1px solid var(--td-component-stroke);background:var(--td-brand-color-light)}
+.zt-team-bulk-count{font-size:12px;font-weight:600;color:var(--td-brand-color);white-space:nowrap}
+.zt-team-bulk-select{width:auto;min-width:132px;max-width:220px}
+.zt-team-bulk-date{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--td-text-color-secondary);white-space:nowrap}
+.zt-team-bulk-date .zt-team-input{width:132px}
 .zt-chip-btn.zt-chip-btn-active,.zt-chip-btn.zt-chip-btn-active:hover{background:var(--td-brand-color-light);border-color:var(--td-brand-color);color:var(--td-brand-color)}
 .zt-team-range{display:flex;align-items:center;gap:6px;height:30px;min-width:250px;padding:0 8px;border:1px solid var(--td-component-stroke);border-radius:6px;background:var(--td-bg-color-container);box-sizing:border-box}
 .zt-team-range:focus-within{border-color:var(--td-brand-color);box-shadow:0 0 0 2px var(--td-brand-color-focus)}
