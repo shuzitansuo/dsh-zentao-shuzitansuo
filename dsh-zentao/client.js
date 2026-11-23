@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.9';
+    const PLUGIN_VERSION = 'v0.2.10';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -1016,31 +1016,63 @@ window.__ModuleLoader__.load({
         }
       });
       const [items, setItems] = useState({ story: [], bug: [], task: [], testtask: [], report: [] });
-      // 每次打开软件默认进入仪表盘；从今日待办提醒进入时直接落到任务列表。
-      const [view, setView] = useState(() => {
-        if (pendingOpenTodayTasks) {
-          pendingOpenTodayTasks = false;
-          return 'list';
-        }
-        return 'dashboard';
-      });
+      // 每次打开软件默认进入仪表盘；从今日待办提醒进入时直接落到「全员任务」。
+      const initialReminder = pendingOpenTodayTasks;
+      const [view, setView] = useState(() => (initialReminder ? 'team' : 'dashboard'));
       const [teamTasks, setTeamTasks] = useState({ loading: false, error: '', tasks: [], members: [], executions: [], loaded: false });
-      const [teamFilters, setTeamFilters] = useState({ member: '', execution: '', status: '', start: '', end: '', q: '' });
+      const [teamFilters, setTeamFilters] = useState(() =>
+        initialReminder
+          ? { member: '', execution: '', status: '__todo__', start: '', end: '', q: '' }
+          : { member: '', execution: '', status: '', start: '', end: '', q: '' },
+      );
       const [teamSort, setTeamSort] = useState({ key: 'deadline', dir: 1 });
       const [teamPage, setTeamPage] = useState(1);
       const [teamPageSize, setTeamPageSize] = useState(20);
       const [teamExporting, setTeamExporting] = useState(false);
       const [teamSelected, setTeamSelected] = useState([]);
       const [teamBulkBusy, setTeamBulkBusy] = useState(false);
+      const [teamTab, setTeamTab] = useState('open');
       useEffect(() => {
+        const applyTodayTasks = (account) => {
+          setView('team');
+          setTeamTab('open');
+          setTeamFilters((prev) => ({
+            ...prev,
+            member: account || '',
+            execution: '',
+            status: '__todo__',
+            start: '',
+            end: '',
+            q: '',
+          }));
+          setTeamPage(1);
+        };
         const openTodayTasks = () => {
           pendingOpenTodayTasks = false;
-          setView('list');
+          if (me.account) {
+            applyTodayTasks(me.account);
+            return;
+          }
+          api('/zentao/api/config')
+            .then((data) => applyTodayTasks(String((data && data.account) || '')))
+            .catch(() => applyTodayTasks(''));
         };
         window.addEventListener(OPEN_TODAY_TASKS_EVENT, openTodayTasks);
         return () => window.removeEventListener(OPEN_TODAY_TASKS_EVENT, openTodayTasks);
+      }, [me.account]);
+      useEffect(() => {
+        if (!initialReminder) return;
+        pendingOpenTodayTasks = false;
+        const apply = (account) => setTeamFilters((prev) => ({ ...prev, member: account || '', status: '__todo__' }));
+        if (me.account) {
+          apply(me.account);
+          return;
+        }
+        api('/zentao/api/config')
+          .then((data) => apply(String((data && data.account) || '')))
+          .catch(() => {});
+        // Initial reminder target is consumed once for this mount.
       }, []);
-      const [teamTab, setTeamTab] = useState('open');
       const [closedFilters, setClosedFilters] = useState({ member: '', execution: '', start: '', end: '', q: '' });
       const [closedSort, setClosedSort] = useState({ key: 'resolvedDate', dir: 1 });
       const [closedPage, setClosedPage] = useState(1);

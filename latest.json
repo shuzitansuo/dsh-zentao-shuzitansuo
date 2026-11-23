@@ -1,5 +1,5 @@
 {
-  "version": "0.2.9",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.9.zip",
-  "notes": "新增启动今日待办提醒：打开 DSH 后在右下角提示今天到期或已逾期的未完成任务，可在设置中关闭或稍后提醒。"
+  "version": "0.2.10",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.10.zip",
+  "notes": "修复今日待办提醒的「查看任务」跳转：进入全员任务并自动筛选当前登录用户未完成任务。"
 }
