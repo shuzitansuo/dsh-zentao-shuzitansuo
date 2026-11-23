@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.12';
+    const PLUGIN_VERSION = 'v0.2.13';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -536,6 +536,17 @@ window.__ModuleLoader__.load({
       day('2027-10-09', '班');
       return tags;
     })();
+    const cnDateKeyOf = (date) =>
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    const cnDayTagOf = (date) => CN_DAY_TAGS[cnDateKeyOf(date)] || '';
+    const cnIsWeekendDay = (date) => date.getDay() === 0 || date.getDay() === 6;
+    const cnIsMakeupWorkday = (date) => cnDayTagOf(date) === '班';
+    const cnIsNonWorkday = (date) => {
+      const tag = cnDayTagOf(date);
+      if (tag === '班') return false;
+      if (tag === '休') return true;
+      return cnIsWeekendDay(date);
+    };
 
     function loadColOrder() {
       try {
@@ -1220,6 +1231,13 @@ window.__ModuleLoader__.load({
           return true;
         }
       });
+      const [showNonWorkdays, setShowNonWorkdays] = useState(() => {
+        try {
+          return localStorage.getItem('dsh-zentao-calendar-nonwork-v1') !== '0';
+        } catch (error) {
+          return true;
+        }
+      });
 
       useEffect(() => {
         try {
@@ -1228,6 +1246,14 @@ window.__ModuleLoader__.load({
           /* ignore */
         }
       }, [showDoneTasks]);
+
+      useEffect(() => {
+        try {
+          localStorage.setItem('dsh-zentao-calendar-nonwork-v1', showNonWorkdays ? '1' : '0');
+        } catch (error) {
+          /* ignore */
+        }
+      }, [showNonWorkdays]);
       const [selectedDate, setSelectedDate] = useState(() => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -4850,9 +4876,9 @@ window.__ModuleLoader__.load({
           byDate.get(task.deadline).push(task);
         }
         const weekNames = ['一', '二', '三', '四', '五', '六', '日'];
-        const buildCell = (date) => {
+        const buildCell = (date, colIndex, colTotal) => {
           const key = dateKeyOf(date);
-          const weekend = date.getDay() === 0 || date.getDay() === 6;
+          const weekend = cnIsWeekendDay(date) && !cnIsMakeupWorkday(date);
           return h(
             'div',
             {
@@ -4861,7 +4887,8 @@ window.__ModuleLoader__.load({
                 'zt-cal-cell' +
                 (weekend ? ' zt-cal-weekend' : '') +
                 (key === todayKey ? ' zt-cal-today' : '') +
-                (key === selectedDate ? ' zt-cal-selected' : ''),
+                (key === selectedDate ? ' zt-cal-selected' : '') +
+                (colTotal && colIndex === colTotal - 1 ? ' zt-cal-col-last' : ''),
               onClick: () => setSelectedDate(key),
               onDoubleClick: () => openTaskModal(key),
               onDragOver: (event) => event.preventDefault(),
@@ -4984,6 +5011,25 @@ window.__ModuleLoader__.load({
         };
         let cells = [];
         let titleText = '';
+        let weekDays = [];
+        let weekMonday = null;
+        let weekSunday = null;
+        if (isWeek) {
+          const anchor = weekAnchor ? new Date(weekAnchor + 'T00:00:00') : today;
+          weekMonday = new Date(anchor);
+          weekMonday.setDate(anchor.getDate() - ((anchor.getDay() + 6) % 7));
+          weekSunday = new Date(weekMonday);
+          weekSunday.setDate(weekMonday.getDate() + 6);
+          for (let i = 0; i < 7; i += 1) {
+            const date = new Date(weekMonday);
+            date.setDate(weekMonday.getDate() + i);
+            weekDays.push(date);
+          }
+        }
+        const visibleWeekDays = isWeek && !showNonWorkdays ? weekDays.filter((date) => !cnIsNonWorkday(date)) : weekDays;
+        const allNonWorking = isWeek && !showNonWorkdays && weekDays.length > 0 && visibleWeekDays.length === 0;
+        const displayedWeekDays = allNonWorking ? weekDays : visibleWeekDays;
+        const weekColumnCount = isWeek ? displayedWeekDays.length : 7;
         if (!isWeek) {
           const year = calendarMonth.year;
           const month = calendarMonth.month;
@@ -4999,27 +5045,20 @@ window.__ModuleLoader__.load({
           while (cells.length < 42) cells.push(h('div', { key: 'tail-' + cells.length, className: 'zt-cal-cell zt-cal-blank' }));
           titleText = year + ' / ' + String(month).padStart(2, '0');
         } else {
-          const anchor = weekAnchor ? new Date(weekAnchor + 'T00:00:00') : today;
-          const monday = new Date(anchor);
-          monday.setDate(anchor.getDate() - ((anchor.getDay() + 6) % 7));
-          for (let i = 0; i < 7; i += 1) {
-            const date = new Date(monday);
-            date.setDate(monday.getDate() + i);
-            cells.push(buildCell(date));
+          for (let i = 0; i < displayedWeekDays.length; i += 1) {
+            cells.push(buildCell(displayedWeekDays[i], i, displayedWeekDays.length));
           }
-          const sunday = new Date(monday);
-          sunday.setDate(monday.getDate() + 6);
           titleText =
-            monday.getFullYear() +
+            weekMonday.getFullYear() +
             ' / ' +
-            String(monday.getMonth() + 1).padStart(2, '0') +
+            String(weekMonday.getMonth() + 1).padStart(2, '0') +
             ' / ' +
-            String(monday.getDate()).padStart(2, '0') +
+            String(weekMonday.getDate()).padStart(2, '0') +
             ' - ' +
-            (sunday.getFullYear() !== monday.getFullYear() ? sunday.getFullYear() + ' / ' : '') +
-            String(sunday.getMonth() + 1).padStart(2, '0') +
+            (weekSunday.getFullYear() !== weekMonday.getFullYear() ? weekSunday.getFullYear() + ' / ' : '') +
+            String(weekSunday.getMonth() + 1).padStart(2, '0') +
             ' / ' +
-            String(sunday.getDate()).padStart(2, '0');
+            String(weekSunday.getDate()).padStart(2, '0');
         }
         const shift = (delta) => {
           if (isWeek) {
@@ -5063,6 +5102,21 @@ window.__ModuleLoader__.load({
                   }),
                   h('span', null, '显示已完成'),
                 ),
+                isWeek
+                  ? h(
+                      'label',
+                      {
+                        className: 'zt-cal-done-toggle zt-cal-nonwork-toggle',
+                        title: '显示法定节假日（周末、调休放假日）；调休上班日即使为周末仍显示',
+                      },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: showNonWorkdays,
+                        onChange: (event) => setShowNonWorkdays(event.target.checked),
+                      }),
+                      h('span', null, '显示节假日'),
+                    )
+                  : null,
               ),
               h('div', { className: 'zt-cal-sub' }, '双击日期空白处新建任务，拖动任务可改截止日期'),
             ),
@@ -5139,16 +5193,42 @@ window.__ModuleLoader__.load({
           myTasks.error
             ? h('div', { className: 'zt-cal-error' }, '刷新任务失败：' + myTasks.error)
             : null,
+          allNonWorking
+            ? h('div', { className: 'zt-cal-filter-note' }, '本周均为法定节假日，暂时显示全部日期')
+            : null,
           h(
             'div',
-            { className: 'zt-cal-grid' + (isWeek ? ' zt-cal-grid-week' : '') },
-            ['一', '二', '三', '四', '五', '六', '日'].map((label) =>
-              h(
-                'div',
-                { key: label, className: 'zt-cal-week' + (label === '六' || label === '日' ? ' zt-cal-week-weekend' : '') },
-                '周' + label,
-              ),
-            ),
+            {
+              className: 'zt-cal-grid' + (isWeek ? ' zt-cal-grid-week' : ''),
+              style: { gridTemplateColumns: 'repeat(' + weekColumnCount + ',minmax(0,1fr))' },
+            },
+            isWeek
+              ? displayedWeekDays.map((date, index) =>
+                  h(
+                    'div',
+                    {
+                      key: 'week-' + dateKeyOf(date),
+                      className:
+                        'zt-cal-week' +
+                        (cnIsWeekendDay(date) && !cnIsMakeupWorkday(date) ? ' zt-cal-week-weekend' : '') +
+                        (index === displayedWeekDays.length - 1 ? ' zt-cal-col-last' : ''),
+                    },
+                    '周' + '日一二三四五六'[date.getDay()],
+                  ),
+                )
+              : weekNames.map((label, index) =>
+                  h(
+                    'div',
+                    {
+                      key: label,
+                      className:
+                        'zt-cal-week' +
+                        (label === '六' || label === '日' ? ' zt-cal-week-weekend' : '') +
+                        (index === weekNames.length - 1 ? ' zt-cal-col-last' : ''),
+                    },
+                    '周' + label,
+                  ),
+                ),
             cells,
           ),
         );
@@ -9348,9 +9428,11 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-cal-done-toggle{display:inline-flex;align-items:center;gap:5px;color:rgba(255,255,255,.92);font-size:11px;line-height:16px;cursor:pointer;user-select:none;white-space:nowrap}
 .zt-cal-done-toggle input{width:14px;height:14px;margin:0;accent-color:#fff;cursor:pointer}
 .zt-cal-error{padding:8px 14px;background:rgba(0,0,0,.18);color:#fff;font-size:12px}
+.zt-cal-filter-note{padding:8px 16px;font-size:12px;color:var(--td-text-color-secondary);background:var(--td-bg-color-container-hover);border-bottom:1px solid var(--td-component-stroke)}
+.zt-cal-grid-week .zt-cal-col-last{border-right:0}
 .zt-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:0}
 .zt-cal-week{padding:8px 10px;font-size:12px;font-weight:500;color:var(--td-text-color-placeholder);text-align:center;border-bottom:1px solid var(--td-component-stroke);border-right:1px solid var(--td-component-stroke)}
-.zt-cal-week:nth-child(7){border-right:0}
+.zt-cal-grid:not(.zt-cal-grid-week) .zt-cal-week:nth-child(7){border-right:0}
 .zt-cal-week-weekend{color:var(--td-text-color-placeholder);background:#fafafa}
 body[data-ds-dark-theme] .zt-root .zt-cal-cell,
 body[data-ds-dark-theme] .zt-root .zt-cal-week{background:var(--td-bg-color-container)}
@@ -9370,7 +9452,7 @@ body[data-ds-dark-theme] .zt-root .zt-cal-lunar-term{color:#6fdc9e}
 body[data-ds-dark-theme] .zt-root .zt-cal-selected{box-shadow:inset 0 0 0 2px var(--td-brand-color)}
 body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(--td-brand-color);color:#fff}
 .zt-cal-cell{height:104px;min-height:0;padding:6px 8px;border-bottom:1px solid var(--td-component-stroke);border-right:1px solid var(--td-component-stroke);display:flex;flex-direction:column;gap:4px;min-width:0;background:var(--td-bg-color-container);transition:background-color .15s;overflow:hidden;box-sizing:border-box}
-.zt-cal-cell:nth-child(7n){border-right:0}
+.zt-cal-grid:not(.zt-cal-grid-week) .zt-cal-cell:nth-child(7n){border-right:0}
 .zt-cal-cell:hover{background:var(--td-brand-color-light,#f2f3ff)}
 .zt-cal-weekend{background:#fafafa}
 .zt-cal-weekend:hover{background:var(--td-brand-color-light,#f2f3ff)}
