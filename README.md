@@ -1,127 +1,98 @@
-# 禅道 AI 工作台（DSH 插件）
+# 禅道 AI 工作台
 
-把 DeepSeek Harness 和禅道（ZenTao）连起来的三栏工作台：
+把 [禅道 ZenTao](https://www.zentao.net/) 和 DeepSeek Harness 连起来的项目工作台。左侧浏览项目/迭代，中间看仪表盘与任务日历，右侧直接用 DeepSeek 对话查询、录入和修改禅道数据。
 
-- 左侧：项目 / 迭代树（置顶拖拽、展开/收起全部、排序、搜索、显示已关闭）
-- 中间：仪表盘 + 任务日历 + 研发需求 / BUG / 任务 / 测试单 / 测试报告列表（行内改状态/指派/优先级/模块/截止日期、列宽列序、只看我）
-- 右侧：DeepSeek 会话（录入需求/BUG、批量建任务、改状态、新增迭代、文档批量建需求、粘贴图片解析、指派提醒、通用只读接口查询）
-- 后台/日历：双击日历空白处新建任务，可切换「批量任务」粘贴多行标题，自动匹配进行中迭代，逐条调整迭代/指派人/截止日期后批量创建
-- 启动提醒：打开 DSH 后右下角提示今天到期/已逾期的未完成任务，可在设置中关闭
-- 自动更新：左下角检查更新 + 版本清单，发现新版本自动下载安装
+![仪表盘](assets/screenshots/dashboard.png)
+
+## 功能
+
+- **项目 / 迭代树**：置顶、拖拽排序、搜索、展开/收起、显示进行中或全部。
+- **工作台列表**：研发需求、BUG、任务、测试单、测试报告；支持列宽/列序、行内改状态、指派、优先级、模块、截止日期，以及「只看我」。
+- **任务日历**：周/月视图，双击空白新建任务，拖动任务改截止日期，同日任务可拖动排序，可隐藏周末和法定节假日。
+- **批量建任务**：粘贴多行任务标题，按关键词自动匹配进行中的迭代，逐条确认/修改迭代、指派人、截止日期后一次创建。
+- **DeepSeek 会话**：录入需求/BUG、批量建需求、改状态、新增迭代、粘贴图片解析；支持 DeepSeek 直连或使用 DSH 当前模型。
+- **全员任务**：跨迭代汇总、成员/状态/截止日期/迭代筛选、行内编辑、批量修改、Excel 导出。
+- **今日待办提醒**：DSH 启动后提示今天到期和已逾期的未完成任务，可在设置中关闭。
+- **自动更新**：插件内检查新版本并提示安装。
+
+![全员任务](assets/screenshots/team-tasks.png)
+
+![批量建任务](assets/screenshots/batch-tasks.png)
 
 ## 环境要求
 
 | 依赖 | 说明 |
 | --- | --- |
-| DeepSeek Harness（桌面版） | 需要支持本地插件（bundle patch + client plugin）。插件按开发时版本的插件 API 编写，DSH 大版本升级后如有接口变化需要微调 |
-| 禅道 16.x | 用登录会话 + HTML 接口；「通用接口查询」依赖禅道 REST API v1（`/api.php/v1/...`，多数 16.x 默认开启） |
-| Node.js / pnpm | DSH 自带 Node；profile 目录需要 pnpm 来建立本地 link |
-| 可选的语音 | 语音输入接口依赖 DSH 的 speech-to-text（SenseVoice）插件包；没装不影响其它功能 |
+| DeepSeek Harness | 需要支持 bundle + client 插件的桌面版 |
+| 禅道 | 推荐 16.x；使用登录会话与 HTML 接口，「通用接口查询」依赖 REST API v1（`/api.php/v1/...`） |
+| Node.js / pnpm | DSH 自带 Node；源码安装时 profile 需要 pnpm |
+| SenseVoice（可选） | 语音输入依赖 DSH 的 speech-to-text 插件；未安装不影响其它功能 |
 
 ## 安装
 
-### 方式一：一键脚本（推荐）
+### 通过 dsh-market / 插件市场
 
-1. 把本目录放到一个**固定位置**（后续升级直接替换，不要放在下载目录里随时删），例如：
-   ```bash
-   mv dsh-zentao-share ~/dsh-zentao-share
-   ```
-2. 运行安装脚本（默认写入 `~/.dsh/profiles/desktop`；如果你的 profile 叫 web，可传参）：
-   ```bash
-   cd ~/dsh-zentao-share
-   ./install.sh            # 默认 desktop profile
-   # 或 ./install.sh ~/.dsh/profiles/web
-   ```
-3. 编辑插件配置，填入你自己的禅道地址和账号：
-   ```bash
-   open ~/dsh-zentao-share/dsh-zentao/cordis.patch.yml
-   ```
-   ```yaml
-   baseUrl: 'http://你的禅道地址:端口'   # 不要以 / 结尾
-   account: '你的账号'
-   password: '你的密码'
-   ```
-4. **重启 DeepSeek Harness**（完全退出再打开），刷新页面，左侧栏出现「禅道 AI 工作台」。
+在 dsh-market 中搜索「禅道 AI 工作台」或 `dsh-zentao-workbench`，点击安装，重启 DeepSeek Harness。
 
-### 方式二：手动安装
+### 直接安装 GitHub 仓库
 
-1. 把 `dsh-zentao` 文件夹放到固定位置，例如 `~/dsh-zentao-share/dsh-zentao`。
-2. 打开 profile 的 `package.json`（如 `~/.dsh/profiles/desktop/package.json`）：
-   - 在 `dependencies` 中加入：
-     ```json
-     "@local/dsh-zentao": "link:/Users/你的用户名/dsh-zentao-share/dsh-zentao"
-     ```
-   - 在 `dsh.profile.bundles` 数组中加入 `"@local/dsh-zentao"`。
-3. 在该 profile 目录执行：
-   ```bash
-   cd ~/.dsh/profiles/desktop
-   pnpm install
-   ```
-   （没有 pnpm 时：`corepack enable` 或 `npm i -g pnpm`）
-4. 编辑 `~/dsh-zentao-share/dsh-zentao/cordis.patch.yml` 填禅道账号（同上）。
-5. 重启 DeepSeek Harness。
+```bash
+dsh plugin --profile desktop add github:shuzitansuo/dsh-zentao-shuzitansuo
+```
 
-## 配置项（`dsh-zentao/cordis.patch.yml`）
+安装后重启 DeepSeek Harness，左侧会出现「禅道 AI 工作台」。
+
+## 首次配置
+
+安装后在插件设置中填写：
+
+- 禅道地址（不要以 `/` 结尾）
+- 禅道账号 / 密码
+- 可选：DeepSeek API Key（不填则使用 DSH 当前模型）
+
+也可以直接编辑 profile 里的 `cordis.patch.yml`：
+
+```yaml
+- insert:
+    - id: zentao-workbench
+      name: dsh-zentao-workbench
+      config:
+        baseUrl: 'http://你的禅道地址:端口'
+        account: '你的账号'
+        password: '你的密码'
+        chatMode: custom
+```
+
+**不要把真实密码或 API Key 提交到公开仓库。** 仓库里的 `cordis.patch.yml` 只提供占位配置。
+
+## 配置项
 
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
 | `baseUrl` | — | 禅道地址，如 `http://192.168.1.10:8080` |
-| `account` / `password` | — | 禅道登录账号（只保存在本机） |
-| `showClosed` | `true` | 左树是否默认显示已关闭的项目/迭代 |
-| `chatMode` | `custom` | `custom` = 插件自带三栏聊天；`native` = 用 DeepSeek 原生会话 + agent 工具驱动禅道 |
-| `assignmentWatch` | `true` | 是否轮询「我的 Bug/需求」做指派提醒（只读） |
+| `account` / `password` | — | 禅道登录账号，只保存在本机 |
+| `showClosed` | `true` | 左树是否显示已关闭项目/迭代 |
+| `chatMode` | `custom` | `custom` = 插件三栏聊天；`native` = 使用 DSH 原生会话 + agent tools |
+| `assignmentWatch` | `true` | 轮询「我的 Bug/需求」做指派提醒（只读） |
 | `assignmentIntervalMs` | `60000` | 指派提醒轮询间隔（毫秒） |
-| `updateUrl` | 空 | 更新清单 JSON 地址，例如 `https://example.com/dsh-zentao/latest.json`；留空则「检查更新」提示未配置 |
-| `deepseekApiKey` | 空 | 填写后右栏会话直连 `api.deepseek.com`（也可用环境变量 `DEEPSEEK_API_KEY`）；留空则走 DSH 当前模型 |
+| `updateUrl` | 空 | 更新清单 JSON 地址；留空则「检查更新」提示未配置 |
+| `deepseekApiKey` | 空 | DeepSeek 直连 Key；也可用环境变量 `DEEPSEEK_API_KEY` |
 | `deepseekBaseUrl` | `https://api.deepseek.com` | DeepSeek API 地址 |
-| `deepseekModel` | `deepseek-chat` | 直连时使用的模型，可改 `deepseek-reasoner` |
+| `deepseekModel` | `deepseek-chat` | 直连模型，可改为 `deepseek-reasoner` |
 
-## 更新机制
+## 更新
 
-- 把新版插件打成 zip 上传，并提供一个清单 JSON：
-  ```json
-  { "version": "0.0.3", "url": "https://example.com/dsh-zentao-0.0.3.zip",
-    "notes": "更新说明", "sha256": "可选的 zip SHA-256" }
-  ```
-- 在 `cordis.patch.yml` 配置 `updateUrl: '.../latest.json'`
-- 左下角版本号旁会出现「检查更新」按钮：打开面板时会自动检查并提示新版本；点击后自动下载、校验并覆盖插件文件
-- 更新不会覆盖你的 `cordis.patch.yml`；装完需重启 DeepSeek Harness 生效
+插件通过 `latest.json` 检查更新；新版本下载后由宿主替换插件文件，用户自己的 `cordis.patch.yml` 不会被覆盖。
 
-## 直连 DeepSeek API
+## 开发
 
-右栏会话默认使用 DSH 里选中的模型。想直接调用 DeepSeek 官方 API：
-
-```yaml
-deepseekApiKey: 'sk-...'
-deepseekBaseUrl: 'https://api.deepseek.com'
-deepseekModel: 'deepseek-chat'   # 或 deepseek-reasoner
+```bash
+git clone https://github.com/shuzitansuo/dsh-zentao-shuzitansuo.git
+cd dsh-zentao-shuzitansuo
 ```
 
-- 禅道录入/改状态等确定性流程不变，只更换底层对话模型
-- Key 只保存在本机 `cordis.patch.yml`，不要提交到公开仓库
-- 图片解析需要模型支持视觉输入；DeepSeek 文本模型不支持时会提示失败
+把本目录以 `link:` 方式加入 DSH profile 的 `dependencies` 和 `dsh.profile.bundles`，然后重启 DeepSeek Harness。插件是无构建步骤的 ESM：`client.js` 是前端，`index.js` + `lib/` 是宿主侧。
 
-## 升级
+## 许可证
 
-- 用新版 `dsh-zentao` 文件夹覆盖旧文件夹（保留你自己的 `cordis.patch.yml` 配置）。
-- 因为是 `link:` 安装，通常不用重新 `pnpm install`；重启 DeepSeek Harness 即可。
-- 如果新增/删除了依赖文件，进入 profile 目录重新 `pnpm install`。
-
-## 卸载
-
-1. 从 profile 的 `package.json` 中删除 `@local/dsh-zentao` 依赖和 `dsh.profile.bundles` 里的 `@local/dsh-zentao`。
-2. 在 profile 目录执行 `pnpm install`。
-3. 删除插件文件夹，重启 DeepSeek Harness。
-
-## 安全提示
-
-- `cordis.patch.yml` 里会保存禅道账号密码，**不要**把它提交到公开仓库或发给别人；分享插件时请保持占位符。
-- 本插件对禅道的写入操作（建需求/BUG/迭代、改状态、指派）都走禅道原有权限校验，不会绕过禅道权限。
-- 「通用接口查询」第一版是只读的，不会修改禅道数据。
-
-## 常见问题
-
-- **左侧没有出现「禅道 AI 工作台」**：确认 `install.sh` 或手动步骤改的是当前正在使用的 profile（`~/.dsh/profiles/desktop`），并完全重启 DSH。
-- **登录失败 / 401**：检查 `baseUrl` 是否可访问、账号密码是否正确；有的禅道开启了 IP 白名单或二次验证。
-- **部分功能 404**：多为禅道版本差异；需求/BUG/迭代等核心功能兼容 16.x，REST 查询需要 API v1 可用。
-- **改完插件不生效**：宿主端文件（`index.js`、`lib/*.js`）需要重启 DSH；仅 `client.js` 改动刷新页面即可。
+MIT

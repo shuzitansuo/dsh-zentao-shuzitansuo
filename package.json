@@ -1,0 +1,49 @@
+{
+  "name": "dsh-zentao-workbench",
+  "version": "0.2.13",
+  "private": false,
+  "type": "module",
+  "description": "禅道 AI 工作台：项目 / 迭代 / 任务 / BUG 管理，DeepSeek 对话与批量建任务",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "assets/**",
+    "screenshots.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shuzitansuo/dsh-zentao-shuzitansuo.git"
+  },
+  "homepage": "https://github.com/shuzitansuo/dsh-zentao-shuzitansuo#readme",
+  "bugs": {
+    "url": "https://github.com/shuzitansuo/dsh-zentao-shuzitansuo/issues"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "zentao",
+    "deepseek",
+    "workbench"
+  ]
+}

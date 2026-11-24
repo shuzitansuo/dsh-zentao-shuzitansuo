@@ -2,7 +2,7 @@
 // Plain JavaScript (no JSX): React comes from the module table.
 
 window.__ModuleLoader__.load({
-  id: '@local/dsh-zentao',
+  id: 'dsh-zentao-workbench',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
