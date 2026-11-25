@@ -954,6 +954,49 @@ export function apply(ctx, config = {}) {
       }
     }
 
+    if (method === 'GET' && path === 'task-detail') {
+      const id = Number(url.searchParams.get('id') || 0);
+      if (!id) return json(res, 400, { ok: false, error: 'id required' });
+      try {
+        const task = await client.taskDetailForCalendar(id);
+        return json(res, 200, { ok: true, task });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'task-schedule') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.setTaskSchedule(Number(body.id), {
+          estStarted: body.estStarted,
+          deadline: body.deadline,
+          estimate: body.estimate,
+        });
+        invalidate('items:');
+        invalidate('dashboard');
+        invalidate('my-tasks');
+        invalidateTeamTasks();
+        return json(res, 200, { ok: true, result });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
+    if (method === 'POST' && path === 'task-desc') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const result = await client.setTaskDescription(Number(body.id), String(body.description || ''));
+        invalidate('items:');
+        invalidate('dashboard');
+        invalidate('my-tasks');
+        invalidateTeamTasks();
+        return json(res, 200, { ok: true, result });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error?.message || String(error) });
+      }
+    }
+
     if (method === 'GET' && path === 'detail') {
       const type = url.searchParams.get('type') === 'bug' ? 'bug' : 'story';
       const id = Number(url.searchParams.get('id') || 0);

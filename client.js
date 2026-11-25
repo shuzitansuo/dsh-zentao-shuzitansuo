@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.13';
+    const PLUGIN_VERSION = 'v0.2.14';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -321,6 +321,17 @@ window.__ModuleLoader__.load({
     const SHOW_ACTIVE_KEY = 'dsh-zentao-show-active-v1';
     const COL_WIDTHS_KEY = 'dsh-zentao-col-widths-v1';
     const COL_ORDER_KEY = 'dsh-zentao-col-order-v1';
+    const CAL_TASK_ORDER_KEY = 'dsh-zentao-calendar-task-order-v1';
+    const CAL_DAY_TIMES_KEY = 'dsh-zentao-calendar-task-times-v1';
+    const DAY_START_MIN = 8 * 60;
+    const DAY_END_MIN = 24 * 60;
+    const DAY_SLOT_MIN = 30;
+    const DAY_HOUR_PX = 56;
+    const DAY_PX_PER_MIN = DAY_HOUR_PX / 60;
+    const clockText = (minutes) => {
+      const total = Math.max(0, Math.min(24 * 60, Math.round(Number(minutes) || 0)));
+      return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+    };
     const COLUMN_KEYS = ['id', 'title', 'module', 'priority', 'assignee', 'status'];
     const PINNED_KEY = 'dsh-zentao-pinned-v1';
 
@@ -1238,6 +1249,71 @@ window.__ModuleLoader__.load({
           return true;
         }
       });
+      const [calendarTaskOrder, setCalendarTaskOrder] = useState(() => {
+        try {
+          const raw = JSON.parse(localStorage.getItem(CAL_TASK_ORDER_KEY) || 'null');
+          return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+        } catch (error) {
+          return {};
+        }
+      });
+      const orderedTasksFor = (tasks, dateKey, options) => {
+        const order = Array.isArray(calendarTaskOrder[dateKey]) ? calendarTaskOrder[dateKey] : [];
+        if (!order.length) {
+          if (!options || !options.doneLast) return tasks.slice();
+          return tasks.slice().sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0));
+        }
+        const taskById = new Map(tasks.map((task) => [String(task.id), task]));
+        const known = order.map((id) => taskById.get(String(id))).filter(Boolean);
+        const knownIds = new Set(known.map((task) => String(task.id)));
+        const remaining = tasks.filter((task) => !knownIds.has(String(task.id)));
+        if (!remaining.length) {
+          return options && options.doneLast
+            ? known.slice().sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0))
+            : known;
+        }
+        const result = known.slice();
+        for (const task of remaining) {
+          const sourceIndex = tasks.findIndex((item) => String(item.id) === String(task.id));
+          let insertAt = result.length;
+          for (let i = sourceIndex - 1; i >= 0; i -= 1) {
+            const pos = result.findIndex((item) => String(item.id) === String(tasks[i].id));
+            if (pos >= 0) {
+              insertAt = pos + 1;
+              break;
+            }
+          }
+          if (insertAt === result.length) {
+            for (let i = sourceIndex + 1; i < tasks.length; i += 1) {
+              const pos = result.findIndex((item) => String(item.id) === String(tasks[i].id));
+              if (pos >= 0) {
+                insertAt = pos;
+                break;
+              }
+            }
+          }
+          result.splice(insertAt, 0, task);
+        }
+        if (options && options.doneLast) {
+          return result.slice().sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0));
+        }
+        return result;
+      };
+      const [calDragTarget, setCalDragTarget] = useState(null);
+      const [calDragSource, setCalDragSource] = useState(null);
+      const [calendarDayTimes, setCalendarDayTimes] = useState(() => {
+        try {
+          const raw = JSON.parse(localStorage.getItem(CAL_DAY_TIMES_KEY) || 'null');
+          return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+        } catch (error) {
+          return {};
+        }
+      });
+      const [dayTaskId, setDayTaskId] = useState(null);
+      const [dayDetail, setDayDetail] = useState(null);
+      const [dayResize, setDayResize] = useState(null);
+      const [dayNow, setDayNow] = useState(() => new Date());
+      const dayClickBlockedRef = useRef(0);
 
       useEffect(() => {
         try {
@@ -1254,15 +1330,67 @@ window.__ModuleLoader__.load({
           /* ignore */
         }
       }, [showNonWorkdays]);
+
+      useEffect(() => {
+        try {
+          localStorage.setItem(CAL_TASK_ORDER_KEY, JSON.stringify(calendarTaskOrder));
+        } catch (error) {
+          /* ignore */
+        }
+      }, [calendarTaskOrder]);
+
+      useEffect(() => {
+        try {
+          localStorage.setItem(CAL_DAY_TIMES_KEY, JSON.stringify(calendarDayTimes));
+        } catch (error) {
+          /* ignore */
+        }
+      }, [calendarDayTimes]);
+
+      useEffect(() => {
+        const timer = setInterval(() => setDayNow(new Date()), 30 * 1000);
+        return () => clearInterval(timer);
+      }, []);
       const [selectedDate, setSelectedDate] = useState(() => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       });
+
+      useEffect(() => {
+        setDayTaskId(null);
+        setDayDetail(null);
+      }, [selectedDate]);
       const [weekAnchor, setWeekAnchor] = useState(() => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       });
       const [myTasks, setMyTasks] = useState({ loading: false, error: '', tasks: [] });
+
+      // Give every task on a day a stable default start time once. Without this,
+      // dragging/resizing one block would shift every later auto-arranged block.
+      useEffect(() => {
+        if (calendarMode !== 'day' || !selectedDate) return;
+        const dayTasks = (myTasks.tasks || []).filter((task) => task.deadline === selectedDate);
+        if (!dayTasks.length) return;
+        const missing = dayTasks.some((task) => !Number.isFinite(Number(calendarDayTimes[String(task.id)])));
+        if (!missing) return;
+        const ordered = orderedTasksFor(dayTasks, selectedDate, { doneLast: false });
+        const next = Object.assign({}, calendarDayTimes);
+        const durationOf = (task) => Math.max(30, Math.round((Number(task.estimate) || 1) * 60));
+        let cursor = DAY_START_MIN;
+        ordered.forEach((task) => {
+          const key = String(task.id);
+          const existing = Number(next[key]);
+          if (Number.isFinite(existing)) {
+            cursor = Math.max(cursor, existing + durationOf(task));
+          } else {
+            next[key] = cursor;
+            cursor += durationOf(task);
+          }
+        });
+        setCalendarDayTimes(next);
+      }, [calendarMode, selectedDate, myTasks.tasks, calendarDayTimes]);
+
       const [taskModal, setTaskModal] = useState(null);
       const [completingTasks, setCompletingTasks] = useState([]);
       const dragTaskRef = useRef(null);
@@ -1277,6 +1405,7 @@ window.__ModuleLoader__.load({
       const [lightsPad, setLightsPad] = useState(0);
       const [dshLeftCollapsed, setDshLeftCollapsed] = useState(false);
       const [cellEditor, setCellEditor] = useState(null);
+      const [calendarStatusMenu, setCalendarStatusMenu] = useState(null);
       const [statusMenu, setStatusMenu] = useState(null);
       const [actionError, setActionError] = useState('');
       const [chatMode, setChatMode] = useState(null);
@@ -2224,11 +2353,235 @@ window.__ModuleLoader__.load({
           loadMyTasks(true);
           loadDashboard(true);
           if (selection.executionId) loadItems(selection.executionId, true);
+          if (dayTaskId && String(dayTaskId) === String(task.id)) refreshDayTaskDetail(task.id);
         } catch (error) {
           setActionError(error.message);
           loadMyTasks(true);
         } finally {
           setCompletingTasks((prev) => prev.filter((id) => id !== task.id));
+        }
+      };
+
+      const calendarStatusOptions = [
+        { value: 'wait', label: '未开始' },
+        { value: 'doing', label: '进行中' },
+        { value: 'done', label: '已完成' },
+        { value: 'pause', label: '已暂停' },
+        { value: 'cancel', label: '已取消' },
+        { value: 'closed', label: '已关闭' },
+      ];
+      const openCalendarStatusMenu = (event, task, dateKey) => {
+        if (!task) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const width = 220;
+        const height = 330;
+        const viewportW = typeof window !== 'undefined' ? window.innerWidth || 1200 : 1200;
+        const viewportH = typeof window !== 'undefined' ? window.innerHeight || 800 : 800;
+        setCalendarStatusMenu({
+          task,
+          dateKey,
+          x: Math.min(event.clientX, Math.max(8, viewportW - width - 8)),
+          y: Math.min(event.clientY, Math.max(8, viewportH - height - 8)),
+          options: [],
+          current: task.status,
+          loading: true,
+          busy: false,
+          error: '',
+        });
+        api('/zentao/api/task-status-options?id=' + task.id)
+          .then((data) => {
+            if (!data || !data.ok) throw new Error((data && data.error) || '读取任务状态失败');
+            const options = Array.isArray(data.options) && data.options.length ? data.options : calendarStatusOptions;
+            setCalendarStatusMenu((prev) =>
+              prev && String(prev.task.id) === String(task.id)
+                ? Object.assign({}, prev, {
+                    options: options.map((option) => ({ value: option.key, label: option.label })),
+                    current: data.current || task.status,
+                    loading: false,
+                  })
+                : prev,
+            );
+          })
+          .catch((error) => {
+            setCalendarStatusMenu((prev) =>
+              prev && String(prev.task.id) === String(task.id)
+                ? Object.assign({}, prev, {
+                    options: calendarStatusOptions,
+                    loading: false,
+                    error: error.message,
+                  })
+                : prev,
+            );
+          });
+      };
+
+      const applyCalendarStatus = async (option) => {
+        const menu = calendarStatusMenu;
+        if (!menu || menu.busy) return;
+        setCalendarStatusMenu(Object.assign({}, menu, { busy: true, error: '' }));
+        try {
+          const result = await api('/zentao/api/task-status', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({ id: menu.task.id, statusKey: option.value }),
+          });
+          if (!result || !result.ok) throw new Error((result && result.error) || '任务状态修改失败');
+          const nextStatus = option.value;
+          const nextStatusText = option.label || nextStatus;
+          setMyTasks((prev) =>
+            Object.assign({}, prev, {
+              tasks: (prev.tasks || []).map((item) =>
+                String(item.id) === String(menu.task.id)
+                  ? Object.assign({}, item, {
+                      status: nextStatus,
+                      statusText: nextStatusText,
+                      done: nextStatus === 'done',
+                    })
+                  : item,
+              ),
+            }),
+          );
+          setCalendarStatusMenu(null);
+          loadMyTasks(true);
+          loadDashboard(true);
+          if (selection.executionId) loadItems(selection.executionId, true);
+          if (dayTaskId && String(dayTaskId) === String(menu.task.id)) refreshDayTaskDetail(menu.task.id);
+        } catch (error) {
+          setCalendarStatusMenu((prev) =>
+            prev && String(prev.task.id) === String(menu.task.id)
+              ? Object.assign({}, prev, { busy: false, error: error.message })
+              : prev,
+          );
+        }
+      };
+
+      const loadDayTaskDetail = async (taskId, seedTask) => {
+        if (!taskId) {
+          setDayTaskId(null);
+          setDayDetail(null);
+          return;
+        }
+        setDayTaskId(taskId);
+        setDayDetail({
+          loading: true,
+          error: '',
+          busy: '',
+          message: '',
+          task: seedTask || null,
+          users: [],
+          iterations: [],
+          descDraft: '',
+        });
+        try {
+          const [detailRes, assignRes, executionRes] = await Promise.all([
+            api('/zentao/api/task-detail?id=' + taskId),
+            api('/zentao/api/task-assign-options?id=' + taskId).catch(() => null),
+            api('/zentao/api/task-execution-options?id=' + taskId).catch(() => null),
+          ]);
+          if (!detailRes || !detailRes.ok) throw new Error((detailRes && detailRes.error) || '读取任务详情失败');
+          const task = detailRes.task || {};
+          const users = (assignRes && assignRes.ok && Array.isArray(assignRes.users)) ? assignRes.users : [];
+          const iterations = (executionRes && executionRes.ok && Array.isArray(executionRes.options)) ? executionRes.options : [];
+          setDayDetail({
+            loading: false,
+            error: '',
+            busy: '',
+            message: '',
+            task,
+            users,
+            iterations,
+            descDraft: task.descText || '',
+          });
+        } catch (error) {
+          setDayDetail((prev) =>
+            prev ? Object.assign({}, prev, { loading: false, error: error.message }) : prev,
+          );
+        }
+      };
+
+      const refreshDayTaskDetail = async (taskId) => {
+        if (!taskId) return;
+        const res = await api('/zentao/api/task-detail?id=' + taskId).catch(() => null);
+        if (res && res.ok && res.task) {
+          setDayDetail((prev) =>
+            prev && String(prev.task?.id) === String(taskId)
+              ? Object.assign({}, prev, { task: res.task, descDraft: prev.descDraft || res.task.descText || '' })
+              : prev,
+          );
+        }
+        loadMyTasks(true);
+      };
+
+      const updateDayAssignee = async (account) => {
+        if (!dayDetail || !dayDetail.task || !account || dayDetail.busy) return;
+        setDayDetail((prev) => (prev ? Object.assign({}, prev, { busy: 'assignee', error: '', message: '' }) : prev));
+        try {
+          const res = await api('/zentao/api/task-assignee', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({ id: dayDetail.task.id, assignedTo: account }),
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || '修改指派人失败');
+          setDayDetail((prev) => (prev ? Object.assign({}, prev, {
+            busy: '',
+            message: '指派人已更新',
+            task: Object.assign({}, prev.task, {
+              assignedTo: account,
+              assignedToRealName: (prev.users.find((user) => user.value === account) || {}).label || account,
+            }),
+          }) : prev));
+          loadMyTasks(true);
+          loadDashboard(true);
+        } catch (error) {
+          setDayDetail((prev) => (prev ? Object.assign({}, prev, { busy: '', error: error.message }) : prev));
+        }
+      };
+
+      const updateDayExecution = async (executionId) => {
+        if (!dayDetail || !dayDetail.task || !executionId || dayDetail.busy) return;
+        setDayDetail((prev) => (prev ? Object.assign({}, prev, { busy: 'execution', error: '', message: '' }) : prev));
+        try {
+          const res = await api('/zentao/api/task-execution', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({ id: dayDetail.task.id, executionId: Number(executionId) }),
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || '修改所属迭代失败');
+          const option = (dayDetail.iterations || []).find((item) => String(item.value) === String(executionId));
+          setDayDetail((prev) => (prev ? Object.assign({}, prev, {
+            busy: '',
+            message: '所属迭代已更新',
+            task: Object.assign({}, prev.task, {
+              execution: Number(executionId),
+              executionName: option ? option.label : prev.task.executionName,
+            }),
+          }) : prev));
+          loadMyTasks(true);
+          loadDashboard(true);
+          if (selection.executionId) loadItems(selection.executionId, true);
+        } catch (error) {
+          setDayDetail((prev) => (prev ? Object.assign({}, prev, { busy: '', error: error.message }) : prev));
+        }
+      };
+
+      const saveDayDescription = async () => {
+        if (!dayDetail || !dayDetail.task || dayDetail.busy) return;
+        setDayDetail((prev) => (prev ? Object.assign({}, prev, { busy: 'desc', error: '', message: '' }) : prev));
+        try {
+          const res = await api('/zentao/api/task-desc', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({ id: dayDetail.task.id, description: String(dayDetail.descDraft || '') }),
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || '保存任务详情失败');
+          setDayDetail((prev) => (prev ? Object.assign({}, prev, {
+            busy: '',
+            message: '任务详情已保存',
+            task: Object.assign({}, prev.task, { descText: String(prev.descDraft || '') }),
+          }) : prev));
+        } catch (error) {
+          setDayDetail((prev) => (prev ? Object.assign({}, prev, { busy: '', error: error.message }) : prev));
         }
       };
 
@@ -2532,7 +2885,7 @@ window.__ModuleLoader__.load({
         if (!itemModal && dialog.open) dialog.close();
       }, [itemModal]);
 
-      const openTaskModal = async (date, presetExecutionId) => {
+      const openTaskModal = async (date, presetExecutionId, options) => {
         const fallbackDate = (() => {
           const now = new Date();
           return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -2549,6 +2902,8 @@ window.__ModuleLoader__.load({
           batchAnalyzing: false,
           batchProgress: '',
           deadline: date || fallbackDate,
+          startTime: options && Number.isFinite(Number(options.startTime)) ? Number(options.startTime) : null,
+          dayView: Boolean(options && options.dayView),
           priority: '3',
           executionId: presetExecutionId ? String(presetExecutionId) : '',
           projectId: 0,
@@ -2667,6 +3022,10 @@ window.__ModuleLoader__.load({
             }),
           });
           if (!res || !res.ok) throw new Error((res && res.error) || '创建任务失败');
+          const created = res.result || {};
+          if (taskModal.dayView && taskModal.startTime !== null && created.id) {
+            setCalendarDayTimes((prev) => Object.assign({}, prev, { [String(created.id)]: taskModal.startTime }));
+          }
           setTaskModal(null);
           loadMyTasks(true);
           loadDashboard(true);
@@ -3568,6 +3927,22 @@ window.__ModuleLoader__.load({
           window.removeEventListener('resize', close);
         };
       }, [cellEditor]);
+
+      useEffect(() => {
+        if (!calendarStatusMenu) return undefined;
+        const onKey = (event) => {
+          if (event.key === 'Escape') setCalendarStatusMenu(null);
+        };
+        const close = () => setCalendarStatusMenu(null);
+        window.addEventListener('keydown', onKey);
+        window.addEventListener('scroll', close, true);
+        window.addEventListener('resize', close);
+        return () => {
+          window.removeEventListener('keydown', onKey);
+          window.removeEventListener('scroll', close, true);
+          window.removeEventListener('resize', close);
+        };
+      }, [calendarStatusMenu]);
 
       useEffect(() => {
         if (!listMenu) return undefined;
@@ -4864,6 +5239,7 @@ window.__ModuleLoader__.load({
 
       const renderCalendar = () => {
         const isWeek = calendarMode === 'week';
+        const isDay = calendarMode === 'day';
         const pad = (value) => String(value).padStart(2, '0');
         const dateKeyOf = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
         const today = new Date();
@@ -4875,6 +5251,71 @@ window.__ModuleLoader__.load({
           if (!byDate.has(task.deadline)) byDate.set(task.deadline, []);
           byDate.get(task.deadline).push(task);
         }
+        const reorderTasksFor = (dateKey, sourceId, targetId, before) => {
+          const tasks = byDate.get(dateKey) || [];
+          const ids = orderedTasksFor(tasks, dateKey, { doneLast: isWeek }).map((task) => String(task.id));
+          const source = String(sourceId);
+          const target = String(targetId);
+          if (source === target || ids.indexOf(source) < 0 || ids.indexOf(target) < 0) return;
+          const withoutSource = ids.filter((id) => id !== source);
+          const targetIndex = withoutSource.indexOf(target);
+          if (targetIndex < 0) return;
+          withoutSource.splice(before ? targetIndex : targetIndex + 1, 0, source);
+          setCalendarTaskOrder((prev) => Object.assign({}, prev, { [dateKey]: withoutSource }));
+        };
+        const setCalendarDropTarget = (dateKey, taskId, before) => {
+          setCalDragTarget((prev) =>
+            prev && prev.date === dateKey && prev.taskId === taskId && prev.before === before
+              ? prev
+              : { date: dateKey, taskId, before },
+          );
+        };
+        const beginCalendarTaskDrag = (event, task, dateKey) => {
+          dragTaskRef.current = task;
+          setCalDragSource({ date: dateKey, taskId: String(task.id) });
+          setCalDragTarget(null);
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move';
+            try {
+              event.dataTransfer.setData('text/plain', String(task.id));
+            } catch (error) {
+              /* ignore */
+            }
+          }
+        };
+        const overCalendarTask = (event, task, dateKey) => {
+          if (!dragTaskRef.current) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+          const rect = event.currentTarget.getBoundingClientRect();
+          setCalendarDropTarget(
+            dateKey,
+            String(task.id),
+            event.clientY < rect.top + rect.height / 2,
+          );
+        };
+        const dropCalendarTask = (event, task, dateKey) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const source = dragTaskRef.current;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const before = event.clientY < rect.top + rect.height / 2;
+          dragTaskRef.current = null;
+          setCalDragTarget(null);
+          setCalDragSource(null);
+          if (!source) return;
+          if (source.deadline === dateKey) {
+            reorderTasksFor(dateKey, source.id, task.id, before);
+          } else {
+            moveTaskDeadline(source, dateKey);
+          }
+        };
+        const endCalendarTaskDrag = () => {
+          dragTaskRef.current = null;
+          setCalDragTarget(null);
+          setCalDragSource(null);
+        };
         const weekNames = ['一', '二', '三', '四', '五', '六', '日'];
         const buildCell = (date, colIndex, colTotal) => {
           const key = dateKeyOf(date);
@@ -4883,6 +5324,7 @@ window.__ModuleLoader__.load({
             'div',
             {
               key,
+              'data-cal-date': key,
               className:
                 'zt-cal-cell' +
                 (weekend ? ' zt-cal-weekend' : '') +
@@ -4891,12 +5333,17 @@ window.__ModuleLoader__.load({
                 (colTotal && colIndex === colTotal - 1 ? ' zt-cal-col-last' : ''),
               onClick: () => setSelectedDate(key),
               onDoubleClick: () => openTaskModal(key),
-              onDragOver: (event) => event.preventDefault(),
+              onDragOver: (event) => {
+                event.preventDefault();
+                if (calDragTarget) setCalDragTarget(null);
+              },
               onDrop: (event) => {
                 event.preventDefault();
                 const task = dragTaskRef.current;
                 dragTaskRef.current = null;
-                if (task) moveTaskDeadline(task, key);
+                setCalDragTarget(null);
+                setCalDragSource(null);
+                if (task && task.deadline !== key) moveTaskDeadline(task, key);
               },
             },
             (() => {
@@ -4931,15 +5378,31 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'zt-cal-tasks' + (isWeek ? '' : ' zt-cal-tasks-month') },
-              (byDate.get(key) || [])
-                .slice()
-                .sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0))
+              orderedTasksFor(byDate.get(key) || [], key, { doneLast: true })
                 .slice(0, isWeek ? undefined : 3)
                 .map((task) => {
+                  const isDragSource =
+                    isWeek &&
+                    calDragSource &&
+                    calDragSource.date === key &&
+                    calDragSource.taskId === String(task.id);
+                  const isDropTarget =
+                    isWeek &&
+                    calDragTarget &&
+                    calDragTarget.date === key &&
+                    calDragTarget.taskId === String(task.id);
+                  const isInactive = !task.done && (task.status === 'pause' || task.status === 'cancel');
                   const chipClass =
                     'zt-cal-task' +
                     (isWeek ? ' zt-cal-task-week' : ' zt-cal-task-month') +
-                    (task.done ? ' zt-cal-task-done' : '');
+                    (task.done ? ' zt-cal-task-done' : '') +
+                    (isInactive ? ' zt-cal-task-inactive zt-cal-task-' + task.status : '') +
+                    (isDragSource ? ' zt-cal-task-dragging' : '') +
+                    (isDropTarget
+                      ? calDragTarget.before
+                        ? ' zt-cal-task-drop-before'
+                        : ' zt-cal-task-drop-after'
+                      : '');
                   const link = h(
                     'a',
                     {
@@ -4947,8 +5410,12 @@ window.__ModuleLoader__.load({
                       href: baseUrl + task.url,
                       target: '_blank',
                       rel: 'noreferrer noopener',
-                      title: task.title,
-                      draggable: false,
+                      title: task.title + (isInactive ? '（' + (task.statusText || '') + '）' : ''),
+                      draggable: isWeek,
+                      onDragStart: isWeek
+                        ? (event) => beginCalendarTaskDrag(event, task, key)
+                        : undefined,
+                      onDragEnd: isWeek ? endCalendarTaskDrag : undefined,
                       onClick: (event) => event.stopPropagation(),
                       onDoubleClick: (event) => event.stopPropagation(),
                     },
@@ -4960,26 +5427,35 @@ window.__ModuleLoader__.load({
                       {
                         key: task.id,
                         className: chipClass,
-                        draggable: !task.done,
-                        onDragStart: task.done
-                          ? undefined
-                          : () => {
-                              dragTaskRef.current = task;
-                            },
-                        onDragEnd: () => {
-                          dragTaskRef.current = null;
-                        },
+                        'data-cal-date': key,
+                        'data-task-id': String(task.id),
+                        draggable: true,
+                        onDragStart: (event) => beginCalendarTaskDrag(event, task, key),
+                        onDragEnd: endCalendarTaskDrag,
+                        onDragOver: (event) => overCalendarTask(event, task, key),
+                        onDrop: (event) => dropCalendarTask(event, task, key),
                         onDoubleClick: (event) => event.stopPropagation(),
+                        onContextMenu: (event) => openCalendarStatusMenu(event, task, key),
                       },
-                      h('input', {
-                        type: 'checkbox',
-                        className: 'zt-cal-task-check',
-                        checked: Boolean(task.done),
-                        disabled: Boolean(task.done) || completingTasks.includes(task.id),
-                        'aria-label': '标记完成：' + task.title,
-                        onClick: (event) => event.stopPropagation(),
-                        onChange: () => completeTask(task),
-                      }),
+                      isInactive
+                        ? h(
+                            'span',
+                            {
+                              className: 'zt-cal-task-mark',
+                              title: task.statusText || '非活动任务',
+                              'aria-label': task.statusText || '非活动任务',
+                            },
+                            '❌',
+                          )
+                        : h('input', {
+                            type: 'checkbox',
+                            className: 'zt-cal-task-check',
+                            checked: Boolean(task.done),
+                            disabled: Boolean(task.done) || completingTasks.includes(task.id),
+                            'aria-label': '标记完成：' + task.title,
+                            onClick: (event) => event.stopPropagation(),
+                            onChange: () => completeTask(task),
+                          }),
                       link,
                     );
                   }
@@ -4991,8 +5467,9 @@ window.__ModuleLoader__.load({
                       href: baseUrl + task.url,
                       target: '_blank',
                       rel: 'noreferrer noopener',
-                      title: task.title,
+                      title: task.title + (isInactive ? '（' + (task.statusText || '') + '）' : ''),
                       draggable: !task.done,
+                      onContextMenu: (event) => openCalendarStatusMenu(event, task, key),
                       onDragStart: task.done
                         ? undefined
                         : () => {
@@ -5030,7 +5507,7 @@ window.__ModuleLoader__.load({
         const allNonWorking = isWeek && !showNonWorkdays && weekDays.length > 0 && visibleWeekDays.length === 0;
         const displayedWeekDays = allNonWorking ? weekDays : visibleWeekDays;
         const weekColumnCount = isWeek ? displayedWeekDays.length : 7;
-        if (!isWeek) {
+        if (!isWeek && !isDay) {
           const year = calendarMonth.year;
           const month = calendarMonth.month;
           const first = new Date(year, month - 1, 1);
@@ -5044,6 +5521,16 @@ window.__ModuleLoader__.load({
           }
           while (cells.length < 42) cells.push(h('div', { key: 'tail-' + cells.length, className: 'zt-cal-cell zt-cal-blank' }));
           titleText = year + ' / ' + String(month).padStart(2, '0');
+        } else if (isDay) {
+          const dayDate = new Date(selectedDate + 'T00:00:00');
+          titleText =
+            dayDate.getFullYear() +
+            ' / ' +
+            String(dayDate.getMonth() + 1).padStart(2, '0') +
+            ' / ' +
+            String(dayDate.getDate()).padStart(2, '0') +
+            ' 周' +
+            '日一二三四五六'[dayDate.getDay()];
         } else {
           for (let i = 0; i < displayedWeekDays.length; i += 1) {
             cells.push(buildCell(displayedWeekDays[i], i, displayedWeekDays.length));
@@ -5066,6 +5553,11 @@ window.__ModuleLoader__.load({
             anchor.setDate(anchor.getDate() + delta * 7);
             setWeekAnchor(dateKeyOf(anchor));
             setCalendarMonth({ year: anchor.getFullYear(), month: anchor.getMonth() + 1 });
+          } else if (isDay) {
+            const anchor = selectedDate ? new Date(selectedDate + 'T00:00:00') : new Date(today);
+            anchor.setDate(anchor.getDate() + delta);
+            setSelectedDate(dateKeyOf(anchor));
+            setCalendarMonth({ year: anchor.getFullYear(), month: anchor.getMonth() + 1 });
           } else {
             setCalendarMonth((prev) => {
               const next = new Date(prev.year, prev.month - 1 + delta, 1);
@@ -5079,6 +5571,406 @@ window.__ModuleLoader__.load({
           setSelectedDate(dateKeyOf(now));
           setWeekAnchor(dateKeyOf(now));
         };
+        const commitDaySchedule = async (task, start, end) => {
+          if (!task || !selectedDate) return;
+          const duration = Math.max(30, Math.min(DAY_END_MIN - DAY_START_MIN, Math.round((end - start) / 30) * 30));
+          const startMin = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - duration, Math.round(start / 15) * 15));
+          const hours = Math.round((duration / 60) * 10) / 10;
+          const timeKey = String(task.id);
+          const previousStart = calendarDayTimes[timeKey];
+          setCalendarDayTimes((prev) => Object.assign({}, prev, { [timeKey]: startMin }));
+          setMyTasks((prev) => Object.assign({}, prev, {
+            tasks: (prev.tasks || []).map((item) =>
+              String(item.id) === String(task.id) ? Object.assign({}, item, { estimate: hours }) : item,
+            ),
+          }));
+          try {
+            const res = await api('/zentao/api/task-schedule', {
+              method: 'POST',
+              headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+              body: JSON.stringify({
+                id: task.id,
+                estimate: hours,
+                estStarted: selectedDate,
+                deadline: selectedDate,
+              }),
+            });
+            if (!res || !res.ok) throw new Error((res && res.error) || '同步任务时间失败');
+            loadMyTasks(true);
+            if (dayTaskId && String(dayTaskId) === String(task.id)) refreshDayTaskDetail(task.id);
+          } catch (error) {
+            setCalendarDayTimes((prev) => {
+              const next = Object.assign({}, prev);
+              if (previousStart === undefined) delete next[timeKey];
+              else next[timeKey] = previousStart;
+              return next;
+            });
+            setActionError('同步任务时间失败：' + (error.message || ''));
+            loadMyTasks(true);
+          }
+        };
+
+        const beginDayResize = (event, block, mode) => {
+          if (!block || !block.task) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const startY = event.clientY;
+          let latest = { start: block.start, end: block.end };
+          const onMove = (moveEvent) => {
+            const delta = Math.round((moveEvent.clientY - startY) / DAY_PX_PER_MIN / 15) * 15;
+            if (mode === 'start') {
+              const nextStart = Math.max(DAY_START_MIN, Math.min(block.end - 30, block.start + delta));
+              latest = { start: nextStart, end: block.end };
+            } else {
+              const nextEnd = Math.max(block.start + 30, Math.min(DAY_END_MIN, block.end + delta));
+              latest = { start: block.start, end: nextEnd };
+            }
+            setDayResize({
+              id: String(block.task.id),
+              mode,
+              start: latest.start,
+              end: latest.end,
+            });
+          };
+          const onUp = () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            setDayResize(null);
+            if (latest.start !== block.start || latest.end !== block.end) {
+              dayClickBlockedRef.current = Date.now() + 250;
+              commitDaySchedule(block.task, latest.start, latest.end);
+            }
+          };
+          window.addEventListener('pointermove', onMove);
+          window.addEventListener('pointerup', onUp);
+        };
+
+        const beginDayMove = (event, block) => {
+          if (!block || !block.task || event.button !== 0) return;
+          if (event.target.closest('.zt-day-event-check, .zt-day-resize')) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const startY = event.clientY;
+          const duration = block.end - block.start;
+          let latest = { start: block.start, end: block.end };
+          let moved = false;
+          const onMove = (moveEvent) => {
+            if (!moved && Math.abs(moveEvent.clientY - startY) < 3) return;
+            moved = true;
+            const delta = Math.round((moveEvent.clientY - startY) / DAY_PX_PER_MIN / 15) * 15;
+            const nextStart = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - duration, block.start + delta));
+            latest = { start: nextStart, end: nextStart + duration };
+            setDayResize({ id: String(block.task.id), mode: 'move', start: latest.start, end: latest.end });
+          };
+          const cleanup = () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onCancel);
+            setDayResize(null);
+          };
+          const onUp = () => {
+            const changed = latest.start !== block.start || latest.end !== block.end;
+            cleanup();
+            if (moved) dayClickBlockedRef.current = Date.now() + 250;
+            if (changed) commitDaySchedule(block.task, latest.start, latest.end);
+          };
+          const onCancel = () => cleanup();
+          window.addEventListener('pointermove', onMove);
+          window.addEventListener('pointerup', onUp);
+          window.addEventListener('pointercancel', onCancel);
+        };
+
+        const renderDayTask = (block) => {
+          const task = block.task;
+          const preview = dayResize && String(dayResize.id) === String(task.id) ? dayResize : block;
+          const top = (preview.start - DAY_START_MIN) * DAY_PX_PER_MIN;
+          const height = Math.max(22, (preview.end - preview.start) * DAY_PX_PER_MIN);
+          const isInactive = !task.done && (task.status === 'pause' || task.status === 'cancel');
+          const laneCount = block.laneCount || 1;
+          const lane = block.lane || 0;
+          const left = lane * (100 / laneCount) + 1;
+          const width = Math.max(18, 100 / laneCount - 2);
+          return h(
+            'div',
+            {
+              key: task.id,
+              className:
+                'zt-day-event' +
+                (task.done ? ' zt-day-event-done' : '') +
+                (isInactive ? ' zt-day-event-inactive zt-day-event-' + task.status : '') +
+                (dayResize && dayResize.mode === 'move' && String(dayResize.id) === String(task.id) ? ' zt-day-event-dragging' : '') +
+                (dayTaskId && String(dayTaskId) === String(task.id) ? ' zt-day-event-selected' : '') +
+                (height < 42 ? ' zt-day-event-short' : ''),
+              style: { top: top + 'px', left: left + '%', width: width + '%', height: height + 'px' },
+              title: task.title,
+              'data-task-id': String(task.id),
+              onClick: (event) => {
+                if (event.target.closest('.zt-day-event-check, .zt-day-resize')) return;
+                if (Date.now() < dayClickBlockedRef.current) return;
+                loadDayTaskDetail(task.id, task);
+              },
+              onPointerDown: (event) => beginDayMove(event, block),
+              onDoubleClick: (event) => event.stopPropagation(),
+              onContextMenu: (event) => openCalendarStatusMenu(event, task, selectedDate),
+            },
+            h(
+              'span',
+              { className: 'zt-day-event-head' },
+              isInactive
+                ? h('span', { className: 'zt-day-event-mark' }, '❌')
+                : h('input', {
+                    type: 'checkbox',
+                    className: 'zt-day-event-check',
+                    checked: Boolean(task.done),
+                    disabled: Boolean(task.done) || completingTasks.includes(task.id),
+                    'aria-label': '标记完成：' + task.title,
+                    onClick: (event) => event.stopPropagation(),
+                    onChange: () => completeTask(task),
+                  }),
+              h('span', { className: 'zt-day-event-title' }, task.title),
+            ),
+            h('span', { className: 'zt-day-event-time' }, clockText(preview.start) + '–' + clockText(preview.end)),
+            h(
+              'span',
+              {
+                className: 'zt-day-resize zt-day-resize-top',
+                title: '拖动调整开始时间',
+                onPointerDown: (event) => beginDayResize(event, block, 'start'),
+              },
+            ),
+            h(
+              'span',
+              {
+                className: 'zt-day-resize zt-day-resize-bottom',
+                title: '拖动调整结束时间',
+                onPointerDown: (event) => beginDayResize(event, block, 'end'),
+              },
+            ),
+          );
+        };
+
+        const renderDayDetail = (block) => {
+          if (!dayTaskId) {
+            return h(
+              'aside',
+              { className: 'zt-day-detail zt-day-detail-empty' },
+              h('div', { className: 'zt-day-detail-empty-title' }, '任务详情'),
+              h('p', null, '点击左侧时间轴上的任务，查看和编辑任务信息。'),
+            );
+          }
+          if (!dayDetail || dayDetail.loading) {
+            return h(
+              'aside',
+              { className: 'zt-day-detail' },
+              h('div', { className: 'zt-day-detail-loading' }, '加载任务详情…'),
+            );
+          }
+          if (dayDetail.error && !dayDetail.task) {
+            return h(
+              'aside',
+              { className: 'zt-day-detail' },
+              h('div', { className: 'zt-day-detail-error' }, dayDetail.error),
+            );
+          }
+          const task = dayDetail.task || {};
+          const users = dayDetail.users || [];
+          const iterations = dayDetail.iterations || [];
+          const assigned = task.assignedTo || '';
+          const hasAssigned = users.some((user) => user.value === assigned);
+          const statusText = task.statusText || task.status || '未开始';
+          return h(
+            'aside',
+            { className: 'zt-day-detail' },
+            h(
+              'div',
+              { className: 'zt-day-detail-head' },
+              h('div', { className: 'zt-day-detail-title', title: task.title }, task.title || '任务 #' + task.id),
+              h(
+                'a',
+                {
+                  className: 'zt-day-detail-open',
+                  href: baseUrl + (task.url || '/task-view-' + task.id + '.html'),
+                  target: '_blank',
+                  rel: 'noreferrer noopener',
+                  title: '在禅道中打开',
+                },
+                '打开',
+              ),
+            ),
+            h('div', { className: 'zt-day-detail-meta' }, h('span', { className: 'zt-tag zt-tag-' + statusTone(task.status) }, statusText)),
+            block
+              ? h('div', { className: 'zt-day-detail-time' }, clockText(block.start) + ' – ' + clockText(block.end), h('span', null, Math.round((block.end - block.start) / 6) / 10 + ' 小时'))
+              : null,
+            h(
+              'div',
+              { className: 'zt-day-field' },
+              h('label', { className: 'zt-day-field-label' }, '指派人'),
+              h(
+                'select',
+                {
+                  className: 'zt-day-select',
+                  value: assigned,
+                  disabled: !!dayDetail.busy,
+                  onChange: (event) => updateDayAssignee(event.target.value),
+                },
+                hasAssigned
+                  ? null
+                  : h('option', { value: assigned }, task.assignedToRealName || assigned || '未指派'),
+                users.map((user) => h('option', { key: user.value, value: user.value }, user.label || user.value)),
+              ),
+            ),
+            h(
+              'div',
+              { className: 'zt-day-field' },
+              h('label', { className: 'zt-day-field-label' }, '所属迭代'),
+              h(
+                'select',
+                {
+                  className: 'zt-day-select',
+                  value: String(task.execution || ''),
+                  disabled: !!dayDetail.busy,
+                  onChange: (event) => updateDayExecution(event.target.value),
+                },
+                iterations.some((item) => String(item.value) === String(task.execution))
+                  ? null
+                  : h('option', { value: String(task.execution || '') }, task.executionName || '未选择迭代'),
+                iterations.map((item) => h('option', { key: item.value, value: item.value }, item.label || item.value)),
+              ),
+            ),
+            h(
+              'div',
+              { className: 'zt-day-detail-grid' },
+              h('span', null, '预计开始', h('b', null, task.estStarted || '—')),
+              h('span', null, '截止日期', h('b', null, task.deadline || '—')),
+              h('span', null, '预计工时', h('b', null, task.estimate ? task.estimate + ' 小时' : '未设置')),
+              h('span', null, '所属项目', h('b', null, task.project ? '#' + task.project : '—')),
+            ),
+            h(
+              'div',
+              { className: 'zt-day-field zt-day-desc-field' },
+              h('label', { className: 'zt-day-field-label' }, '任务详情'),
+              h('textarea', {
+                className: 'zt-day-desc',
+                value: dayDetail.descDraft || '',
+                placeholder: '补充任务背景或验收点',
+                disabled: !!dayDetail.busy,
+                onChange: (event) => {
+                  const value = event.target.value;
+                  setDayDetail((prev) => (prev ? Object.assign({}, prev, { descDraft: value }) : prev));
+                },
+              }),
+              h(
+                'div',
+                { className: 'zt-day-desc-foot' },
+                h('span', { className: dayDetail.error ? 'zt-day-detail-error' : 'zt-day-detail-message' }, dayDetail.error || dayDetail.message || ''),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'zt-btn zt-btn-primary zt-btn-sm',
+                    disabled: dayDetail.busy === 'desc',
+                    onClick: saveDayDescription,
+                  },
+                  dayDetail.busy === 'desc' ? '保存中…' : '保存详情',
+                ),
+              ),
+            ),
+          );
+        };
+
+        const renderDayView = () => {
+          const dayKey = selectedDate;
+          const dayDate = new Date(dayKey + 'T00:00:00');
+          const dayTasks = orderedTasksFor(byDate.get(dayKey) || [], dayKey);
+          let cursor = DAY_START_MIN;
+          const scheduled = dayTasks.map((task) => {
+            const customStart = Number(calendarDayTimes[String(task.id)]);
+            const hasCustomStart = Number.isFinite(customStart) && customStart > 0;
+            const duration = Math.max(30, Math.round((Number(task.estimate) || 1) * 60));
+            const start = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - 30, hasCustomStart ? customStart : Math.max(cursor, DAY_START_MIN)));
+            const end = Math.min(DAY_END_MIN, start + duration);
+            cursor = Math.max(cursor, Math.ceil(end / DAY_SLOT_MIN) * DAY_SLOT_MIN);
+            return { task, start, end };
+          });
+          const groups = [];
+          let currentGroup = [];
+          let currentEnd = -1;
+          scheduled
+            .slice()
+            .sort((a, b) => a.start - b.start || a.end - b.end)
+            .forEach((block) => {
+              if (!currentGroup.length || block.start < currentEnd) {
+                currentGroup.push(block);
+                currentEnd = Math.max(currentEnd, block.end);
+              } else {
+                groups.push(currentGroup);
+                currentGroup = [block];
+                currentEnd = block.end;
+              }
+            });
+          if (currentGroup.length) groups.push(currentGroup);
+          for (const group of groups) {
+            const laneEnds = [];
+            for (const block of group) {
+              let lane = laneEnds.findIndex((end) => end <= block.start);
+              if (lane < 0) lane = laneEnds.length;
+              laneEnds[lane] = block.end;
+              block.lane = lane;
+            }
+            for (const block of group) block.laneCount = laneEnds.length;
+          }
+          const dayHeight = (DAY_END_MIN - DAY_START_MIN) * DAY_PX_PER_MIN;
+          const nowMinutes = dayNow.getHours() * 60 + dayNow.getMinutes();
+          const showNow = dayKey === todayKey && nowMinutes >= DAY_START_MIN && nowMinutes <= DAY_END_MIN;
+          const slots = [];
+          for (let minute = DAY_START_MIN; minute < DAY_END_MIN; minute += DAY_SLOT_MIN) {
+            slots.push(minute);
+          }
+          const selectedBlock = scheduled.find((block) => String(block.task.id) === String(dayTaskId)) || null;
+          return h(
+            'div',
+            { className: 'zt-day-view' },
+            h(
+              'div',
+              { className: 'zt-day-axis', style: { height: dayHeight + 'px' } },
+              slots.map((minute, index) =>
+                h(
+                  'div',
+                  { key: 'slot-' + minute, className: 'zt-day-slot', style: { height: DAY_SLOT_MIN * DAY_PX_PER_MIN + 'px' } },
+                  index === 0 || minute % 60 === 0 ? h('span', null, clockText(minute)) : null,
+                ),
+              ),
+            ),
+            h(
+              'div',
+              {
+                className: 'zt-day-lane',
+                style: { height: dayHeight + 'px' },
+                onDoubleClick: (event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const minutes = DAY_START_MIN + Math.round(((event.clientY - rect.top) / DAY_PX_PER_MIN) / DAY_SLOT_MIN) * DAY_SLOT_MIN;
+                  const startTime = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - 30, minutes));
+                  openTaskModal(dayKey, null, { startTime, dayView: true });
+                },
+              },
+              showNow
+                ? h('div', { className: 'zt-day-now-label', style: { top: (nowMinutes - DAY_START_MIN) * DAY_PX_PER_MIN + 'px' } }, clockText(nowMinutes))
+                : null,
+              showNow
+                ? h('div', {
+                    className: 'zt-day-now-line',
+                    style: { top: (nowMinutes - DAY_START_MIN) * DAY_PX_PER_MIN + 'px' },
+                  })
+                : null,
+              !scheduled.length
+                ? h('div', { className: 'zt-day-empty' }, '当天暂无任务，双击空白处新建')
+                : null,
+              scheduled.map(renderDayTask),
+            ),
+            renderDayDetail(selectedBlock),
+          );
+        };
+
         return h(
           'section',
           { className: 'zt-cal', 'aria-label': '任务日历' },
@@ -5118,7 +6010,13 @@ window.__ModuleLoader__.load({
                     )
                   : null,
               ),
-              h('div', { className: 'zt-cal-sub' }, '双击日期空白处新建任务，拖动任务可改截止日期'),
+              h(
+                'div',
+                { className: 'zt-cal-sub' },
+                isDay
+                  ? '双击空白处新建任务；拖动任务调整时间，上下边缘调整时长；右击任务可改状态'
+                  : '双击日期空白处新建任务，拖动任务可改截止日期，拖到同日任务上可排序',
+              ),
             ),
             h(
               'div',
@@ -5145,11 +6043,28 @@ window.__ModuleLoader__.load({
                     {
                       type: 'button',
                       role: 'tab',
-                      className: 'zt-cal-mode-btn' + (!isWeek ? ' zt-cal-mode-btn-active' : ''),
-                      'aria-selected': !isWeek ? 'true' : 'false',
+                      className: 'zt-cal-mode-btn' + (calendarMode === 'month' ? ' zt-cal-mode-btn-active' : ''),
+                      'aria-selected': calendarMode === 'month' ? 'true' : 'false',
                       onClick: () => setCalendarMode('month'),
                     },
                     '月视图',
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      role: 'tab',
+                      className: 'zt-cal-mode-btn' + (isDay ? ' zt-cal-mode-btn-active' : ''),
+                      'aria-selected': isDay ? 'true' : 'false',
+                      onClick: () => {
+                        const anchor = selectedDate ? new Date(selectedDate + 'T00:00:00') : new Date();
+                        setCalendarMonth({ year: anchor.getFullYear(), month: anchor.getMonth() + 1 });
+                        setCalendarMode('day');
+                        setDayTaskId(null);
+                        setDayDetail(null);
+                      },
+                    },
+                    '日视图',
                   ),
                 ),
               h(
@@ -5157,8 +6072,8 @@ window.__ModuleLoader__.load({
                 {
                   className: 'zt-icon-btn',
                   type: 'button',
-                  title: isWeek ? '上一周' : '上个月',
-                  'aria-label': isWeek ? '上一周' : '上个月',
+                  title: isWeek ? '上一周' : isDay ? '前一天' : '上个月',
+                  'aria-label': isWeek ? '上一周' : isDay ? '前一天' : '上个月',
                   onClick: () => shift(-1),
                 },
                 h(GlyphIcon, { name: 'chevron-left', size: 16 }),
@@ -5169,8 +6084,8 @@ window.__ModuleLoader__.load({
                 {
                   className: 'zt-icon-btn',
                   type: 'button',
-                  title: isWeek ? '下一周' : '下个月',
-                  'aria-label': isWeek ? '下一周' : '下个月',
+                  title: isWeek ? '下一周' : isDay ? '后一天' : '下个月',
+                  'aria-label': isWeek ? '下一周' : isDay ? '后一天' : '下个月',
                   onClick: () => shift(1),
                 },
                 h(GlyphIcon, { name: 'chevron-right', size: 16 }),
@@ -5196,7 +6111,9 @@ window.__ModuleLoader__.load({
           allNonWorking
             ? h('div', { className: 'zt-cal-filter-note' }, '本周均为法定节假日，暂时显示全部日期')
             : null,
-          h(
+          isDay
+            ? renderDayView()
+            : h(
             'div',
             {
               className: 'zt-cal-grid' + (isWeek ? ' zt-cal-grid-week' : ''),
@@ -6965,6 +7882,59 @@ window.__ModuleLoader__.load({
         );
       })();
 
+      const calendarStatusPopup = (() => {
+        if (!calendarStatusMenu) return null;
+        const width = 220;
+        const viewportW = typeof window !== 'undefined' ? window.innerWidth || 1200 : 1200;
+        const viewportH = typeof window !== 'undefined' ? window.innerHeight || 800 : 800;
+        const estimated = calendarStatusMenu.loading
+          ? 110
+          : Math.min(380, 84 + calendarStatusMenu.options.length * 34 + (calendarStatusMenu.error ? 28 : 0));
+        const left = clamp(calendarStatusMenu.x, 8, Math.max(8, viewportW - width - 8));
+        const top = clamp(calendarStatusMenu.y, 8, Math.max(8, viewportH - estimated - 8));
+        return h(
+          'div',
+          { className: 'zt-popup-layer', onClick: () => setCalendarStatusMenu(null) },
+          h(
+            'div',
+            {
+              className: 'zt-popup zt-cal-status-pop',
+              style: { left: left + 'px', top: top + 'px', width: width + 'px' },
+              role: 'menu',
+              'aria-label': '修改任务状态',
+              onClick: (event) => event.stopPropagation(),
+            },
+            h('div', { className: 'zt-popup-head' }, '修改任务状态'),
+            h('div', { className: 'zt-cal-status-task', title: calendarStatusMenu.task.title }, calendarStatusMenu.task.title),
+            calendarStatusMenu.error
+              ? h('div', { className: 'zt-cal-status-error' }, calendarStatusMenu.error)
+              : null,
+            calendarStatusMenu.loading
+              ? h('div', { className: 'zt-popup-loading' }, '加载中…')
+              : h(
+                  'div',
+                  { className: 'zt-popup-list' },
+                  calendarStatusMenu.options.map((option) => {
+                    const active = String(option.value) === String(calendarStatusMenu.current);
+                    return h(
+                      'button',
+                      {
+                        key: option.value,
+                        type: 'button',
+                        role: 'menuitemradio',
+                        'aria-checked': active ? 'true' : 'false',
+                        className: 'zt-popup-item' + (active ? ' zt-popup-item-active' : ''),
+                        disabled: !!calendarStatusMenu.busy || active,
+                        onClick: () => applyCalendarStatus(option),
+                      },
+                      option.label,
+                    );
+                  }),
+                ),
+          ),
+        );
+      })();
+
       return h(
         'div',
         {
@@ -8681,6 +9651,7 @@ window.__ModuleLoader__.load({
             )
           : null,
         cellPopup,
+        calendarStatusPopup,
         actionError ? h('div', { className: 'zt-toast' }, actionError) : null,
       );
     }
@@ -9415,7 +10386,7 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-cal-title{font-size:14px;font-weight:600;color:#fff}
 .zt-cal-sub{margin-top:3px;font-size:12px;color:rgba(255,255,255,.78)}
 .zt-cal-mode-slot{display:flex;align-items:center;margin-left:20px;flex:0 0 auto}
-.zt-cal-actions{display:flex;align-items:center;gap:4px;margin-left:auto;flex-wrap:nowrap;min-width:0}
+.zt-cal-actions{display:flex;align-items:center;gap:4px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end;min-width:0}
 .zt-cal-actions>*{flex:0 0 auto}
 .zt-cal-mode{display:inline-flex;gap:2px;padding:2px;border:1px solid rgba(255,255,255,.45);border-radius:var(--td-radius-round,999px);background:rgba(255,255,255,.12)}
 .zt-cal-mode-btn{height:24px;padding:0 10px;border:0;border-radius:var(--td-radius-round,999px);background:transparent;color:rgba(255,255,255,.9);cursor:pointer;font-size:12px;line-height:24px;white-space:nowrap;transition:background-color .15s,color .15s}
@@ -9445,6 +10416,9 @@ body[data-ds-dark-theme] .zt-root .zt-cal-task{background:#253549;color:#a9c7ff}
 body[data-ds-dark-theme] .zt-root .zt-cal-task:hover{background:#2d4262;border-color:var(--td-brand-color)}
 body[data-ds-dark-theme] .zt-root .zt-cal-task-done{background:#2c2c2c;color:rgba(255,255,255,.42)}
 body[data-ds-dark-theme] .zt-root .zt-cal-task-done .zt-cal-task-link{color:rgba(255,255,255,.42)}
+body[data-ds-dark-theme] .zt-root .zt-cal-task-inactive{background:#2c2c2c;color:rgba(255,255,255,.42)}
+body[data-ds-dark-theme] .zt-root .zt-cal-task-inactive:hover{background:#343434;color:rgba(255,255,255,.42)}
+body[data-ds-dark-theme] .zt-root .zt-cal-task-inactive .zt-cal-task-link{color:rgba(255,255,255,.42)}
 body[data-ds-dark-theme] .zt-root .zt-cal-day-num{color:rgba(255,255,255,.78)}
 body[data-ds-dark-theme] .zt-root .zt-cal-lunar{color:rgba(255,255,255,.44)}
 body[data-ds-dark-theme] .zt-root .zt-cal-lunar-festival{color:#ff8a80}
@@ -9474,15 +10448,95 @@ body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(-
 .zt-cal-tasks{display:flex;flex-direction:column;gap:8px;overflow:hidden;margin-top:2px}
 .zt-cal-tasks-month{gap:4px;margin-top:1px}
 .zt-cal-task-month{padding:2px 6px;line-height:14px;font-size:11px;max-height:20px;flex:0 0 auto}
-.zt-cal-task{display:block;padding:4px 8px;border-radius:6px;background:var(--td-brand-color-light);color:var(--td-text-color-brand);font-size:12px;line-height:16px;text-decoration:none;cursor:grab;border:1px solid transparent;transition:background-color .15s,border-color .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.zt-cal-task{display:block;padding:4px 8px;border-radius:6px;background:var(--td-brand-color-light);color:var(--td-text-color-brand);font-size:12px;line-height:16px;text-decoration:none;cursor:grab;border:1px solid transparent;transition:background-color .15s,border-color .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:none}
 .zt-cal-task-link{display:block;color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .zt-cal-task-week{display:flex;align-items:flex-start;gap:6px;white-space:normal;padding:4px 8px}
 .zt-cal-task-week .zt-cal-task-link{flex:1;min-width:0;white-space:normal;word-break:break-all;max-height:32px;overflow:hidden}
 .zt-cal-task-check{width:13px;height:13px;margin:2px 0 0;flex:0 0 auto;accent-color:var(--td-brand-color);cursor:pointer}
-.zt-cal-task-done,.zt-cal-task-done:hover{background:var(--td-bg-color-container-hover);border-color:transparent;color:var(--td-text-color-placeholder);cursor:default;box-shadow:none}
+.zt-cal-task-done,.zt-cal-task-done:hover{background:var(--td-bg-color-container-hover);border-color:transparent;color:var(--td-text-color-placeholder);cursor:grab;box-shadow:none}
+.zt-cal-task-done:active{cursor:grabbing}
+.zt-cal-task-check:disabled{pointer-events:none;cursor:grab}
 .zt-cal-task-done .zt-cal-task-link{color:var(--td-text-color-placeholder)}
 .zt-cal-task:hover{background:var(--td-brand-color-light, #e3f2fd);border-color:var(--td-brand-color);color:var(--td-text-color-brand)}
+.zt-cal-task-inactive,.zt-cal-task-inactive:hover{background:var(--td-bg-color-container-hover);border-color:transparent;color:var(--td-text-color-placeholder);box-shadow:none}
+.zt-cal-task-inactive .zt-cal-task-link{color:var(--td-text-color-placeholder)}
+.zt-cal-task-mark{width:14px;height:14px;margin:1px 0 0;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-size:10px;line-height:1}
 .zt-cal-task:active{cursor:grabbing}
+.zt-cal-task.zt-cal-task-dragging{opacity:.55;border-color:var(--td-brand-color);box-shadow:0 0 0 2px var(--td-brand-color-light);cursor:grabbing}
+.zt-cal-task.zt-cal-task-drop-before{box-shadow:inset 0 2px 0 var(--td-brand-color)}
+.zt-cal-task.zt-cal-task-drop-after{box-shadow:inset 0 -2px 0 var(--td-brand-color)}
+
+.zt-day-view{display:grid;grid-template-columns:56px minmax(0,1fr) 300px;align-items:stretch;background:var(--td-bg-color-container);min-height:0}
+.zt-day-axis{position:relative;border-right:1px solid var(--td-component-stroke);background:#fff;box-sizing:border-box}
+.zt-day-slot{position:relative;box-sizing:border-box;border-bottom:1px solid rgba(15,23,42,.06)}
+.zt-day-slot>span{position:absolute;top:-7px;right:6px;font-size:10px;line-height:14px;color:var(--td-text-color-placeholder);font-variant-numeric:tabular-nums;background:#fff;padding:0 1px;z-index:1}
+.zt-day-slot:first-child>span{top:2px}
+.zt-day-lane{position:relative;overflow:hidden;box-sizing:border-box;border-right:1px solid var(--td-component-stroke);background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 27px,rgba(15,23,42,.055) 27px,rgba(15,23,42,.055) 28px),repeating-linear-gradient(to bottom,transparent 0,transparent 55px,rgba(15,23,42,.1) 55px,rgba(15,23,42,.1) 56px);background-color:var(--td-bg-color-container)}
+.zt-day-now-line{position:absolute;left:0;right:0;height:2px;background:#e34d59;z-index:3;pointer-events:none;box-shadow:0 0 0 1px rgba(227,77,89,.12)}
+.zt-day-now-label{position:absolute;left:5px;transform:translateY(-50%);z-index:4;padding:1px 5px;border-radius:4px;background:#e34d59;color:#fff;font-size:9px;line-height:14px;font-weight:600;font-variant-numeric:tabular-nums;pointer-events:none}
+.zt-day-empty{position:absolute;left:50%;top:120px;transform:translateX(-50%);font-size:12px;color:var(--td-text-color-placeholder);pointer-events:none;white-space:nowrap}
+.zt-day-event{position:absolute;z-index:2;box-sizing:border-box;padding:4px 7px 3px;border-radius:7px;border:1px solid transparent;border-bottom:2px solid #fff;border-left:3px solid var(--td-brand-color);background:var(--td-brand-color-light);color:var(--td-text-color-brand);cursor:grab;overflow:hidden;transition:background-color .15s,border-color .15s,box-shadow .15s;user-select:none;touch-action:none}
+.zt-day-event:hover{background:var(--td-brand-color-light-hover,#e0ecff);border-color:var(--td-brand-color);box-shadow:0 2px 8px rgba(0,82,217,.14)}
+.zt-day-event-selected{box-shadow:0 0 0 2px var(--td-brand-color),0 2px 8px rgba(0,82,217,.14)}
+.zt-day-event-dragging{cursor:grabbing;z-index:6;opacity:.96;box-shadow:0 8px 20px rgba(15,23,42,.18)}
+.zt-day-event-head{display:flex;align-items:flex-start;gap:5px;min-width:0}
+.zt-day-event-check{width:12px;height:12px;margin:2px 0 0;flex:0 0 auto;accent-color:var(--td-brand-color);cursor:pointer}
+.zt-day-event-mark{width:12px;height:12px;margin:2px 0 0;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-size:9px;line-height:1}
+.zt-day-event-title{flex:1;min-width:0;font-size:12px;line-height:15px;font-weight:500;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-all}
+.zt-day-event-time{display:block;margin-top:2px;font-size:10px;line-height:13px;color:var(--td-text-color-secondary);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.zt-day-event-short{padding:2px 6px 1px}
+.zt-day-event-short .zt-day-event-time{display:none}
+.zt-day-event-short .zt-day-event-title{-webkit-line-clamp:1;line-height:14px}
+.zt-day-event-done,.zt-day-event-done:hover{background:var(--td-bg-color-container-hover);border-color:transparent;color:var(--td-text-color-placeholder);border-left-color:var(--td-text-color-placeholder)}
+.zt-day-event-done .zt-day-event-title{color:var(--td-text-color-placeholder)}
+.zt-day-event-inactive,.zt-day-event-inactive:hover{background:var(--td-bg-color-container-hover);border-color:transparent;color:var(--td-text-color-placeholder);border-left-color:var(--td-text-color-placeholder)}
+.zt-day-event-inactive .zt-day-event-title{color:var(--td-text-color-placeholder)}
+.zt-day-event.zt-day-event-pause,.zt-day-event.zt-day-event-cancel{background:var(--td-bg-color-container-hover)}
+.zt-day-event-done,.zt-day-event-done:hover,.zt-day-event-inactive,.zt-day-event-inactive:hover,.zt-day-event.zt-day-event-pause,.zt-day-event.zt-day-event-cancel{border-bottom-color:#fff}
+.zt-day-resize{position:absolute;left:0;right:0;height:7px;z-index:4;cursor:ns-resize;touch-action:none}
+.zt-day-resize-top{top:0;border-radius:7px 7px 0 0}
+.zt-day-resize-bottom{bottom:0;border-radius:0 0 7px 7px}
+.zt-day-resize:after{content:'';position:absolute;left:12px;right:12px;height:2px;border-radius:2px;background:transparent;transition:background-color .15s}
+.zt-day-resize-top:after{top:2px}
+.zt-day-resize-bottom:after{bottom:2px}
+.zt-day-event:hover .zt-day-resize:after{background:rgba(0,82,217,.28)}
+.zt-day-resize:hover:after{background:var(--td-brand-color)}
+.zt-day-detail{min-width:0;overflow:auto;box-sizing:border-box;padding:14px 14px 16px;background:var(--td-bg-color-container);border-left:1px solid var(--td-component-stroke)}
+.zt-day-detail-empty{display:flex;flex-direction:column;justify-content:flex-start;padding-top:26px}
+.zt-day-detail-empty-title{font-size:13px;font-weight:600;color:var(--td-text-color-primary);margin-bottom:8px}
+.zt-day-detail-empty p{margin:0;font-size:12px;line-height:19px;color:var(--td-text-color-placeholder)}
+.zt-day-detail-loading{font-size:12px;color:var(--td-text-color-placeholder)}
+.zt-day-detail-head{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px}
+.zt-day-detail-title{flex:1;min-width:0;font-size:14px;line-height:20px;font-weight:600;color:var(--td-text-color-primary);overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;word-break:break-all}
+.zt-day-detail-open{flex:0 0 auto;font-size:11px;line-height:20px;color:var(--td-brand-color);text-decoration:none}
+.zt-day-detail-open:hover{text-decoration:underline}
+.zt-day-detail-meta{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.zt-day-detail-time{font-size:12px;color:var(--td-text-color-secondary);font-variant-numeric:tabular-nums;margin-bottom:10px}
+.zt-day-detail-time span{margin-left:7px;color:var(--td-text-color-placeholder);font-size:11px}
+.zt-day-field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.zt-day-field-label{font-size:11px;line-height:16px;color:var(--td-text-color-placeholder)}
+.zt-day-select{width:100%;height:30px;padding:0 8px;border:1px solid var(--td-component-stroke);border-radius:5px;background:var(--td-bg-color-container);color:var(--td-text-color-primary);font:var(--td-font-body-medium);font-size:12px;outline:none;box-sizing:border-box}
+.zt-day-select:focus{border-color:var(--td-brand-color)}
+.zt-day-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;padding:9px 0 10px;margin-bottom:2px;border-top:1px solid var(--td-component-stroke);border-bottom:1px solid var(--td-component-stroke);font-size:11px;line-height:17px;color:var(--td-text-color-placeholder)}
+.zt-day-detail-grid b{display:block;font-weight:500;color:var(--td-text-color-secondary);font-variant-numeric:tabular-nums;word-break:break-all}
+.zt-day-desc-field{margin-top:10px}
+.zt-day-desc{width:100%;min-height:104px;resize:vertical;box-sizing:border-box;padding:8px 9px;border:1px solid var(--td-component-stroke);border-radius:5px;background:var(--td-bg-color-container);color:var(--td-text-color-primary);font:var(--td-font-body-medium);font-size:12px;line-height:18px;outline:none}
+.zt-day-desc:focus{border-color:var(--td-brand-color)}
+.zt-day-desc-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px}
+.zt-day-detail-message{font-size:11px;color:#2ba471}
+.zt-day-detail-error{font-size:11px;color:#d54941}
+.zt-day-detail-error-block{padding:10px 0;font-size:12px;color:#d54941}
+body[data-ds-dark-theme] .zt-root .zt-day-axis{background:#181818}
+body[data-ds-dark-theme] .zt-root .zt-day-slot>span{background:#181818}
+body[data-ds-dark-theme] .zt-root .zt-day-slot{border-bottom-color:rgba(255,255,255,.06)}
+body[data-ds-dark-theme] .zt-root .zt-day-slot>span{background:#181818}
+body[data-ds-dark-theme] .zt-root .zt-day-lane{background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 27px,rgba(255,255,255,.055) 27px,rgba(255,255,255,.055) 28px),repeating-linear-gradient(to bottom,transparent 0,transparent 55px,rgba(255,255,255,.09) 55px,rgba(255,255,255,.09) 56px);background-color:#181818}
+body[data-ds-dark-theme] .zt-root .zt-day-event{background:#253549;color:#a9c7ff}
+body[data-ds-dark-theme] .zt-root .zt-day-event:hover{background:#2d4262}
+body[data-ds-dark-theme] .zt-root .zt-day-event-done,body[data-ds-dark-theme] .zt-root .zt-day-event-inactive{background:#2c2c2c;color:rgba(255,255,255,.42);border-left-color:rgba(255,255,255,.3)}
+body[data-ds-dark-theme] .zt-root .zt-day-event-done .zt-day-event-title,body[data-ds-dark-theme] .zt-root .zt-day-event-inactive .zt-day-event-title{color:rgba(255,255,255,.42)}
+body[data-ds-dark-theme] .zt-root .zt-day-detail{background:var(--td-bg-color-container)}
+
 .zt-modal-dialog{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;max-height:100vh;margin:0;padding:24px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;box-sizing:border-box;overflow:auto}
 .zt-modal-dialog::backdrop{background:rgba(0,0,0,.4)}
 .zt-modal{width:520px;max-width:100%;border-radius:8px;background:var(--td-bg-color-container);box-shadow:0 12px 40px rgba(0,0,0,.18);display:flex;flex-direction:column;max-height:calc(100vh - 48px);overflow:visible}
@@ -9657,6 +10711,9 @@ body[data-ds-dark-theme] .zt-root .zt-table td{border-bottom-color:rgba(255,255,
 .zt-popup-layer{position:fixed;inset:0;z-index:60}
 .zt-popup{position:fixed;z-index:61;box-sizing:border-box;max-height:360px;overflow:auto;padding:4px;background:var(--td-bg-color-container);border:1px solid var(--td-component-border);border-radius:var(--td-radius-medium);box-shadow:var(--td-shadow-2);display:flex;flex-direction:column;gap:2px}
 .zt-popup-head{padding:4px 8px 6px;font:var(--td-font-body-small);color:var(--td-text-color-secondary);border-bottom:1px solid var(--td-component-stroke);margin-bottom:2px}
+.zt-cal-status-task{padding:6px 8px 6px;font-size:12px;line-height:16px;color:var(--td-text-color-placeholder);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.zt-cal-status-error{padding:2px 8px 6px;font-size:11px;line-height:16px;color:var(--td-error-color,#e34d59)}
+.zt-cal-status-pop .zt-popup-list{gap:1px}
 .zt-popup-list{display:flex;flex-direction:column;gap:2px}
 .zt-popup-item{display:flex;align-items:center;width:100%;box-sizing:border-box;padding:6px 8px;border:0;background:transparent;border-radius:var(--td-radius-default);cursor:pointer;font:var(--td-font-body-medium);color:var(--td-text-color-primary);text-align:left}
 .zt-popup-item:hover:not(:disabled){background:var(--td-bg-color-container-hover)}

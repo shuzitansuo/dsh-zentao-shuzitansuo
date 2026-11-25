@@ -1,9 +1,9 @@
 {
   "name": "dsh-zentao-workbench",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "private": false,
   "type": "module",
-  "description": "禅道 AI 工作台：项目 / 迭代 / 任务 / BUG 管理，DeepSeek 对话与批量建任务",
+  "description": "禅道 AI 工作台：项目 / 迭代 / 任务 / BUG、日/周/月日历与 DeepSeek 对话",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",

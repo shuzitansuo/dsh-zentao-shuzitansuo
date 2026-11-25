@@ -1,5 +1,5 @@
 {
-  "version": "0.2.13",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.13.zip",
-  "notes": "周视图新增「显示节假日」开关：可隐藏普通周末和调休放假日，调休上班日即使为周末仍保留；整周均为节假日时自动显示全部日期并提示。"
+  "version": "0.2.14",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.14.zip",
+  "notes": "新增任务日历日视图：08:00–24:00 时间轴、拖动/拉伸任务同步禅道工时与日期、右侧任务详情编辑；周视图已完成任务统一置底，并保留任务间白色分隔线。"
 }
