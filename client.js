@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.15';
+    const PLUGIN_VERSION = 'v0.2.16';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -1315,6 +1315,7 @@ window.__ModuleLoader__.load({
       const [dayResize, setDayResize] = useState(null);
       const [dayNow, setDayNow] = useState(() => new Date());
       const dayClickBlockedRef = useRef(0);
+      const dayEstimateFixRef = useRef(new Set());
 
       useEffect(() => {
         try {
@@ -1377,7 +1378,7 @@ window.__ModuleLoader__.load({
         if (!missing) return;
         const ordered = orderedTasksFor(dayTasks, selectedDate, { doneLast: false });
         const next = Object.assign({}, calendarDayTimes);
-        const durationOf = (task) => Math.max(15, Math.round((Number(task.estimate) || 1) * 60));
+        const durationOf = (task) => Math.max(DAY_SNAP_MIN, Math.round(((Number(task.estimate) || 1) * 60) / DAY_SNAP_MIN) * DAY_SNAP_MIN);
         let cursor = DAY_START_MIN;
         ordered.forEach((task) => {
           const key = String(task.id);
@@ -1391,6 +1392,75 @@ window.__ModuleLoader__.load({
         });
         setCalendarDayTimes(next);
       }, [calendarMode, selectedDate, myTasks.tasks, calendarDayTimes]);
+
+      // Existing tasks may carry estimates such as 4.8h from an older ZenTao
+      // entry. Normalize them to the calendar's 15-minute grid once they are
+      // shown in the day view, and write the rounded value back to ZenTao.
+      useEffect(() => {
+        dayEstimateFixRef.current = new Set();
+      }, [selectedDate]);
+
+      useEffect(() => {
+        if (calendarMode !== 'day' || !selectedDate) return;
+        const dayTasks = (myTasks.tasks || []).filter((task) => task.deadline === selectedDate);
+        const changed = [];
+        const nextEstimates = new Map();
+        for (const task of dayTasks) {
+          const id = String(task.id);
+          const estimate = Number(task.estimate);
+          if (!Number.isFinite(estimate) || estimate <= 0) continue;
+          if (dayEstimateFixRef.current.has(id)) continue;
+          if (Math.abs(estimate * 4 - Math.round(estimate * 4)) < 0.000001) continue;
+          const rounded = Math.max(0.25, Math.round(estimate * 4) / 4);
+          dayEstimateFixRef.current.add(id);
+          nextEstimates.set(id, rounded);
+          changed.push({ task, estimate: rounded });
+        }
+        if (!changed.length) return;
+        setMyTasks((prev) => Object.assign({}, prev, {
+          tasks: (prev.tasks || []).map((task) =>
+            nextEstimates.has(String(task.id))
+              ? Object.assign({}, task, { estimate: nextEstimates.get(String(task.id)) })
+              : task,
+          ),
+        }));
+        setCalendarDayTimes((prev) => {
+          const dayIds = new Set(dayTasks.map((task) => String(task.id)));
+          let next = null;
+          for (const [key, raw] of Object.entries(prev)) {
+            if (!dayIds.has(key)) continue;
+            const value = Number(raw);
+            if (!Number.isFinite(value)) continue;
+            const snapped = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN, Math.round(value / DAY_SNAP_MIN) * DAY_SNAP_MIN));
+            if (snapped !== value) {
+              if (!next) next = Object.assign({}, prev);
+              next[key] = snapped;
+            }
+          }
+          return next || prev;
+        });
+        Promise.allSettled(changed.map(({ task, estimate }) =>
+          api('/zentao/api/task-schedule', {
+            method: 'POST',
+            headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+            body: JSON.stringify({
+              id: task.id,
+              estimate,
+              estStarted: task.estStarted || selectedDate,
+              deadline: task.deadline || selectedDate,
+            }),
+          }),
+        )).then((results) => {
+          const failed = results.filter((result) => result.status === 'rejected' || !result.value || !result.value.ok);
+          if (failed.length) {
+            setActionError('部分任务预计工时同步失败，已按 15 分钟显示');
+          }
+          loadMyTasks(true);
+          if (dayTaskId && changed.some(({ task }) => String(task.id) === String(dayTaskId))) {
+            refreshDayTaskDetail(dayTaskId);
+          }
+        });
+      }, [calendarMode, selectedDate, myTasks.tasks]);
 
       const [taskModal, setTaskModal] = useState(null);
       const [completingTasks, setCompletingTasks] = useState([]);
@@ -5887,7 +5957,7 @@ window.__ModuleLoader__.load({
           const scheduled = dayTasks.map((task) => {
             const customStart = Number(calendarDayTimes[String(task.id)]);
             const hasCustomStart = Number.isFinite(customStart) && customStart > 0;
-            const duration = Math.max(DAY_SNAP_MIN, Math.round((Number(task.estimate) || 1) * 60));
+            const duration = Math.max(DAY_SNAP_MIN, Math.round(((Number(task.estimate) || 1) * 60) / DAY_SNAP_MIN) * DAY_SNAP_MIN);
             const start = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - DAY_SNAP_MIN, hasCustomStart ? customStart : Math.max(cursor, DAY_START_MIN)));
             const end = Math.min(DAY_END_MIN, start + duration);
             cursor = Math.max(cursor, Math.ceil(end / DAY_SNAP_MIN) * DAY_SNAP_MIN);

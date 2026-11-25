@@ -1,5 +1,5 @@
 {
-  "version": "0.2.15",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.15.zip",
-  "notes": "日历日视图任务块改为 15 分钟粒度：拖动和上下拉伸按 15 分钟吸附，工时支持 3.25 小时等两位小数；修复详情时长显示和 15 分钟小任务时间不可见的问题。"
+  "version": "0.2.16",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.16.zip",
+  "notes": "日视图打开当天任务时，把非 15 分钟整倍数的预计工时按最近 15 分钟归一化并写回禅道，界面和任务详情同步；修复 4.8 小时任务显示为 4 小时 48 分、结束时间出现 20:03 的问题。"
 }
