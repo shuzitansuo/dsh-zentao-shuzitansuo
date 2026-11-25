@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.14';
+    const PLUGIN_VERSION = 'v0.2.15';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -326,6 +326,7 @@ window.__ModuleLoader__.load({
     const DAY_START_MIN = 8 * 60;
     const DAY_END_MIN = 24 * 60;
     const DAY_SLOT_MIN = 30;
+    const DAY_SNAP_MIN = 15;
     const DAY_HOUR_PX = 56;
     const DAY_PX_PER_MIN = DAY_HOUR_PX / 60;
     const clockText = (minutes) => {
@@ -1376,7 +1377,7 @@ window.__ModuleLoader__.load({
         if (!missing) return;
         const ordered = orderedTasksFor(dayTasks, selectedDate, { doneLast: false });
         const next = Object.assign({}, calendarDayTimes);
-        const durationOf = (task) => Math.max(30, Math.round((Number(task.estimate) || 1) * 60));
+        const durationOf = (task) => Math.max(15, Math.round((Number(task.estimate) || 1) * 60));
         let cursor = DAY_START_MIN;
         ordered.forEach((task) => {
           const key = String(task.id);
@@ -5573,9 +5574,9 @@ window.__ModuleLoader__.load({
         };
         const commitDaySchedule = async (task, start, end) => {
           if (!task || !selectedDate) return;
-          const duration = Math.max(30, Math.min(DAY_END_MIN - DAY_START_MIN, Math.round((end - start) / 30) * 30));
-          const startMin = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - duration, Math.round(start / 15) * 15));
-          const hours = Math.round((duration / 60) * 10) / 10;
+          const duration = Math.max(DAY_SNAP_MIN, Math.min(DAY_END_MIN - DAY_START_MIN, Math.round((end - start) / DAY_SNAP_MIN) * DAY_SNAP_MIN));
+          const startMin = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - duration, Math.round(start / DAY_SNAP_MIN) * DAY_SNAP_MIN));
+          const hours = Math.round((duration / 60) * 100) / 100;
           const timeKey = String(task.id);
           const previousStart = calendarDayTimes[timeKey];
           setCalendarDayTimes((prev) => Object.assign({}, prev, { [timeKey]: startMin }));
@@ -5617,12 +5618,12 @@ window.__ModuleLoader__.load({
           const startY = event.clientY;
           let latest = { start: block.start, end: block.end };
           const onMove = (moveEvent) => {
-            const delta = Math.round((moveEvent.clientY - startY) / DAY_PX_PER_MIN / 15) * 15;
+            const delta = Math.round((moveEvent.clientY - startY) / DAY_PX_PER_MIN / DAY_SNAP_MIN) * DAY_SNAP_MIN;
             if (mode === 'start') {
-              const nextStart = Math.max(DAY_START_MIN, Math.min(block.end - 30, block.start + delta));
+              const nextStart = Math.max(DAY_START_MIN, Math.min(block.end - DAY_SNAP_MIN, block.start + delta));
               latest = { start: nextStart, end: block.end };
             } else {
-              const nextEnd = Math.max(block.start + 30, Math.min(DAY_END_MIN, block.end + delta));
+              const nextEnd = Math.max(block.start + DAY_SNAP_MIN, Math.min(DAY_END_MIN, block.end + delta));
               latest = { start: block.start, end: nextEnd };
             }
             setDayResize({
@@ -5657,7 +5658,7 @@ window.__ModuleLoader__.load({
           const onMove = (moveEvent) => {
             if (!moved && Math.abs(moveEvent.clientY - startY) < 3) return;
             moved = true;
-            const delta = Math.round((moveEvent.clientY - startY) / DAY_PX_PER_MIN / 15) * 15;
+            const delta = Math.round((moveEvent.clientY - startY) / DAY_PX_PER_MIN / DAY_SNAP_MIN) * DAY_SNAP_MIN;
             const nextStart = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - duration, block.start + delta));
             latest = { start: nextStart, end: nextStart + duration };
             setDayResize({ id: String(block.task.id), mode: 'move', start: latest.start, end: latest.end });
@@ -5799,7 +5800,7 @@ window.__ModuleLoader__.load({
             ),
             h('div', { className: 'zt-day-detail-meta' }, h('span', { className: 'zt-tag zt-tag-' + statusTone(task.status) }, statusText)),
             block
-              ? h('div', { className: 'zt-day-detail-time' }, clockText(block.start) + ' – ' + clockText(block.end), h('span', null, Math.round((block.end - block.start) / 6) / 10 + ' 小时'))
+              ? h('div', { className: 'zt-day-detail-time' }, clockText(block.start) + ' – ' + clockText(block.end), h('span', null, Math.round((block.end - block.start) / 60 * 100) / 100 + ' 小时'))
               : null,
             h(
               'div',
@@ -5886,10 +5887,10 @@ window.__ModuleLoader__.load({
           const scheduled = dayTasks.map((task) => {
             const customStart = Number(calendarDayTimes[String(task.id)]);
             const hasCustomStart = Number.isFinite(customStart) && customStart > 0;
-            const duration = Math.max(30, Math.round((Number(task.estimate) || 1) * 60));
-            const start = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - 30, hasCustomStart ? customStart : Math.max(cursor, DAY_START_MIN)));
+            const duration = Math.max(DAY_SNAP_MIN, Math.round((Number(task.estimate) || 1) * 60));
+            const start = Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - DAY_SNAP_MIN, hasCustomStart ? customStart : Math.max(cursor, DAY_START_MIN)));
             const end = Math.min(DAY_END_MIN, start + duration);
-            cursor = Math.max(cursor, Math.ceil(end / DAY_SLOT_MIN) * DAY_SLOT_MIN);
+            cursor = Math.max(cursor, Math.ceil(end / DAY_SNAP_MIN) * DAY_SNAP_MIN);
             return { task, start, end };
           });
           const groups = [];
@@ -10484,8 +10485,9 @@ body[data-ds-dark-theme] .zt-root .zt-cal-today .zt-cal-day-num{background:var(-
 .zt-day-event-mark{width:12px;height:12px;margin:2px 0 0;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-size:9px;line-height:1}
 .zt-day-event-title{flex:1;min-width:0;font-size:12px;line-height:15px;font-weight:500;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-all}
 .zt-day-event-time{display:block;margin-top:2px;font-size:10px;line-height:13px;color:var(--td-text-color-secondary);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.zt-day-event-short{padding:2px 6px 1px}
-.zt-day-event-short .zt-day-event-time{display:none}
+.zt-day-event-short{display:flex;align-items:center;gap:6px;padding:2px 6px}
+.zt-day-event-short .zt-day-event-head{flex:1 1 auto;min-width:0;align-items:center;gap:4px}
+.zt-day-event-short .zt-day-event-time{display:block;flex:0 0 auto;margin-top:0;font-size:9px;line-height:12px}
 .zt-day-event-short .zt-day-event-title{-webkit-line-clamp:1;line-height:14px}
 .zt-day-event-done,.zt-day-event-done:hover{background:var(--td-bg-color-container-hover);border-color:transparent;color:var(--td-text-color-placeholder);border-left-color:var(--td-text-color-placeholder)}
 .zt-day-event-done .zt-day-event-title{color:var(--td-text-color-placeholder)}

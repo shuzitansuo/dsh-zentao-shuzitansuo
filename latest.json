@@ -1,5 +1,5 @@
 {
-  "version": "0.2.14",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.14.zip",
-  "notes": "新增任务日历日视图：08:00–24:00 时间轴、拖动/拉伸任务同步禅道工时与日期、右侧任务详情编辑；周视图已完成任务统一置底，并保留任务间白色分隔线。"
+  "version": "0.2.15",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.15.zip",
+  "notes": "日历日视图任务块改为 15 分钟粒度：拖动和上下拉伸按 15 分钟吸附，工时支持 3.25 小时等两位小数；修复详情时长显示和 15 分钟小任务时间不可见的问题。"
 }
