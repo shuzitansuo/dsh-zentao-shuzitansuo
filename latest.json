@@ -1,5 +1,5 @@
 {
-  "version": "0.2.16",
-  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.16.zip",
-  "notes": "日视图打开当天任务时，把非 15 分钟整倍数的预计工时按最近 15 分钟归一化并写回禅道，界面和任务详情同步；修复 4.8 小时任务显示为 4 小时 48 分、结束时间出现 20:03 的问题。"
+  "version": "0.2.17",
+  "url": "https://raw.githubusercontent.com/shuzitansuo/dsh-zentao-shuzitansuo/main/dist/dsh-zentao-0.2.17.zip",
+  "notes": "新增一句话自然语言添加待办；左侧导航栏（仪表盘/项目/任务）及底部通知、设置、检查更新入口；设置改为左右分类结构并支持默认打开视图；全员任务卡片新增延期/今天指标与今天到期标识；仪表盘和全员任务隐藏项目树，优化 DSH 左侧收起布局。"
 }

@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const PLUGIN_VERSION = 'v0.2.16';
+    const PLUGIN_VERSION = 'v0.2.17';
     const HEADERS = { 'x-zentao-client': '1' };
     const LAYOUT_KEY = 'dsh-zentao-layout-v1';
     const LEFT_MIN_WIDTH = 360;
@@ -317,6 +317,30 @@ window.__ModuleLoader__.load({
       }
     }
 
+    const DEFAULT_VIEW_KEY = 'dsh-zentao-default-view-v1';
+    const DEFAULT_VIEW_OPTIONS = [
+      { value: 'dashboard', label: '仪表盘' },
+      { value: 'list', label: '项目' },
+      { value: 'team', label: '任务' },
+    ];
+
+    function loadDefaultView() {
+      try {
+        const value = localStorage.getItem(DEFAULT_VIEW_KEY);
+        return DEFAULT_VIEW_OPTIONS.some((item) => item.value === value) ? value : 'dashboard';
+      } catch (error) {
+        return 'dashboard';
+      }
+    }
+
+    function saveDefaultView(value) {
+      try {
+        if (DEFAULT_VIEW_OPTIONS.some((item) => item.value === value)) localStorage.setItem(DEFAULT_VIEW_KEY, value);
+      } catch (error) {
+        /* storage may be unavailable */
+      }
+    }
+
     const CHAT_KEY = 'dsh-zentao-chat-v1';
     const SHOW_ACTIVE_KEY = 'dsh-zentao-show-active-v1';
     const COL_WIDTHS_KEY = 'dsh-zentao-col-widths-v1';
@@ -332,6 +356,232 @@ window.__ModuleLoader__.load({
     const clockText = (minutes) => {
       const total = Math.max(0, Math.min(24 * 60, Math.round(Number(minutes) || 0)));
       return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+    };
+
+    // 自然语言快速添加：解析日期、时间与重复短语。ZenTao 没有重复任务字段，
+    // 因此「每个工作日 / 每周X」只剥离词语，按单次任务创建。
+    const NATURAL_CN_DIGITS = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+    const naturalCnNumber = (raw) => {
+      if (/^\d+$/.test(raw)) return Number(raw);
+      if (raw === '十') return 10;
+      if (raw.includes('十')) {
+        const parts = raw.split('十');
+        const tens = parts[0] ? NATURAL_CN_DIGITS[parts[0]] : 1;
+        const ones = parts[1] ? NATURAL_CN_DIGITS[parts[1]] : 0;
+        return Number.isFinite(tens) && Number.isFinite(ones) ? tens * 10 + ones : NaN;
+      }
+      return NATURAL_CN_DIGITS[raw];
+    };
+    const NATURAL_DATE_TOKEN = '([0-9]{1,2}|[一二两三四五六七八九十]{1,3})';
+    const NATURAL_MONTH_DAY_RE = new RegExp(NATURAL_DATE_TOKEN + '月' + NATURAL_DATE_TOKEN + '[日号]');
+    const NATURAL_WEEKDAY_CHARS = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 };
+    const NATURAL_RELATIVE_DAYS = { 大后天: 3, 后天: 2, 明天: 1, 明日: 1, 今天: 0, 今日: 0, 昨天: -1, 昨日: -1, 前天: -2 };
+    const naturalDateKey = (date) =>
+      date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+    const naturalTodayKey = () => naturalDateKey(new Date());
+    const parseNaturalDate = (text, baseKey) => {
+      const original = String(text || '').trim();
+      let working = original
+        .replace(/明晚/g, '明天晚上')
+        .replace(/今晚/g, '今天晚上')
+        .replace(/昨晚/g, '昨天晚上')
+        .replace(/明早/g, '明天早上')
+        .replace(/今早/g, '今天早上')
+        .replace(/昨早/g, '昨天早上');
+      const base = new Date((baseKey || naturalTodayKey()) + 'T00:00:00');
+      let date = '';
+      const makeDate = (year, month, day) => {
+        const d = new Date(year, month - 1, day);
+        if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) return null;
+        return d;
+      };
+      const consume = (regex) => {
+        const m = working.match(regex);
+        if (!m) return null;
+        working = (working.slice(0, m.index) + ' ' + working.slice(m.index + m[0].length)).trim();
+        return m;
+      };
+      const setDate = (d) => {
+        if (d && !date) date = naturalDateKey(d);
+      };
+      const iso = consume(/([0-9]{4})[-/.]([0-9]{1,2})[-/.]([0-9]{1,2})/);
+      if (iso) setDate(makeDate(Number(iso[1]), Number(iso[2]), Number(iso[3])));
+      if (!date) {
+        const ymd = consume(/([0-9]{4})年([0-9]{1,2})月([0-9]{1,2})[日号]/);
+        if (ymd) setDate(makeDate(Number(ymd[1]), Number(ymd[2]), Number(ymd[3])));
+      }
+      if (!date) {
+        const md = consume(NATURAL_MONTH_DAY_RE);
+        if (md) {
+          const month = naturalCnNumber(md[1]);
+          const day = naturalCnNumber(md[2]);
+          if (Number.isFinite(month) && Number.isFinite(day)) {
+            let d = makeDate(base.getFullYear(), month, day);
+            if (d && d < base) d = makeDate(base.getFullYear() + 1, month, day);
+            setDate(d);
+          }
+        }
+      }
+      if (!date) {
+        const wd = consume(/(?:在\s*)?(下下|下个|下|这个|这|本)?(?:周|星期|礼拜)([一二三四五六日天])/);
+        if (wd) {
+          const prefix = wd[1] || '';
+          const target = NATURAL_WEEKDAY_CHARS[wd[2]];
+          const offsetFromMonday = base.getDay() === 0 ? 6 : base.getDay() - 1;
+          const monday = new Date(base.getFullYear(), base.getMonth(), base.getDate() - offsetFromMonday);
+          let d = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + (target === 0 ? 6 : target - 1));
+          if (prefix.startsWith('下')) {
+            d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + (prefix === '下下' ? 14 : 7));
+          } else if (!prefix && d < base) {
+            d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7);
+          }
+          setDate(d);
+        }
+      }
+      if (!date) {
+        // 「下周」没有具体星期几时，默认下周一。
+        const nextWeek = consume(/(?:在\s*)?下(?:个)?(?:周|星期|礼拜)(?![一二三四五六日天])/);
+        if (nextWeek) {
+          const offsetFromMonday = base.getDay() === 0 ? 6 : base.getDay() - 1;
+          const monday = new Date(base.getFullYear(), base.getMonth(), base.getDate() - offsetFromMonday + 7);
+          setDate(monday);
+        }
+      }
+      if (!date) {
+        // 「下个月」没有具体日期时，默认下个月 1 日。
+        const nextMonth = consume(/(?:在\s*)?下(?:个)?月(?:份)?(?:\s*([0-9]{1,2}|[一二两三四五六七八九十]{1,3})\s*[日号])?/);
+        if (nextMonth) {
+          const day = nextMonth[1] ? naturalCnNumber(nextMonth[1]) : 1;
+          const d = makeDate(base.getFullYear(), base.getMonth() + 2, Number.isFinite(day) ? day : 1);
+          setDate(d || makeDate(base.getFullYear(), base.getMonth() + 2, 1));
+        }
+      }
+      if (!date) {
+        const rel = consume(/(?:在\s*)?(大后天|后天|明天|明日|今天|今日|昨天|昨日|前天)/);
+        if (rel) setDate(new Date(base.getFullYear(), base.getMonth(), base.getDate() + NATURAL_RELATIVE_DAYS[rel[1]]));
+      }
+      if (!date) {
+        const after = consume(/([0-9]+|[一二两三四五六七八九十]{1,3})天后/);
+        if (after) {
+          const days = naturalCnNumber(after[1]);
+          if (Number.isFinite(days)) setDate(new Date(base.getFullYear(), base.getMonth(), base.getDate() + days));
+        }
+      }
+      let title = working
+        .replace(/[（(【\[]\s*[）)】\]]/g, ' ')
+        .replace(/^[\s,，。、;；:：\-—]+/, '')
+        .replace(/[\s,，。、;；:：\-—]+$/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!title) title = original;
+      return { title, date };
+    };
+    const NATURAL_TIME_PERIOD = '凌晨|早上|早晨|上午|中午|下午|傍晚|晚上|夜里|夜间';
+    const parseNaturalTime = (text) => {
+      const original = String(text || '').trim();
+      let working = original;
+      let startTime = null;
+      const periodHour = (hour, period) => {
+        if (period === '凌晨') return hour === 12 ? 0 : hour;
+        if (period === '中午') return hour < 11 ? hour + 12 : hour;
+        if (period === '下午' || period === '傍晚' || period === '晚上' || period === '夜里' || period === '夜间') {
+          if (hour === 12) return 0;
+          return hour < 12 ? hour + 12 : hour;
+        }
+        return hour;
+      };
+      const takeTime = (regex, hourIndex, minuteIndex, periodIndex, suffixIndex) => {
+        const before = working;
+        const m = working.match(regex);
+        if (!m) return false;
+        const rawHour = m[hourIndex];
+        const rawMinute = minuteIndex == null ? '' : m[minuteIndex] || '';
+        const period = periodIndex == null ? '' : m[periodIndex] || '';
+        let hour = /^[0-9]+$/.test(rawHour) ? Number(rawHour) : naturalCnNumber(rawHour);
+        let minute = 0;
+        let keepSuffix = false;
+        if (suffixIndex != null) {
+          const suffix = m[suffixIndex] || '';
+          if (suffix === '半') minute = 30;
+          else if (suffix === '一刻') minute = 15;
+          else if (suffix === '三刻') minute = 45;
+          else if (suffix === '整') {
+            minute = 0;
+            // 「7点整理周报」里的「整」是动词开头，不是整点后缀；保留它。
+            const nextChar = before[m.index + m[0].length] || '';
+            if (nextChar && !/[\s,，。、;；:：]/.test(nextChar)) keepSuffix = true;
+          } else if (suffix) {
+            const numeric = suffix.match(/[0-9]{1,2}/);
+            if (numeric) minute = Number(numeric[0]);
+          }
+        } else if (rawMinute) {
+          minute = Number(rawMinute);
+        }
+        if (!period && rawHour === '一' && !m[suffixIndex] && !rawMinute) {
+          working = before;
+          return false;
+        }
+        if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute < 0 || minute > 59) {
+          working = before;
+          return false;
+        }
+        hour = periodHour(hour, period);
+        if (hour < 0 || hour > 23) {
+          working = before;
+          return false;
+        }
+        working = (
+          before.slice(0, m.index) +
+          ' ' +
+          (keepSuffix ? '整' : '') +
+          before.slice(m.index + m[0].length)
+        ).trim();
+        startTime = hour * 60 + minute;
+        return true;
+      };
+      const colonRe = new RegExp('(?:在\\s*)?(' + NATURAL_TIME_PERIOD + ')?\\s*([0-9]{1,2})\\s*[:：]\\s*([0-9]{1,2})');
+      let matched = takeTime(colonRe, 2, 3, 1, null);
+      if (!matched) {
+        const pointRe = new RegExp(
+          '(?:在\\s*)?(' + NATURAL_TIME_PERIOD + ')?\\s*([0-9]{1,2}|[一二两三四五六七八九十]{1,3})\\s*(?:点|时)(?:\\s*(半|一刻|三刻|整|([0-9]{1,2})\\s*分?))?',
+        );
+        matched = takeTime(pointRe, 2, null, 1, 3);
+      }
+      let title = working
+        .replace(/[（(【\[]\s*[）)】\]]/g, ' ')
+        .replace(/^[\s,，。、;；:：\-—]+/, '')
+        .replace(/[\s,，。、;；:：\-—]+$/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!title) title = original;
+      return { title, startTime };
+    };
+    const stripNaturalRecurrence = (text) => {
+      const original = String(text || '').trim();
+      const match = /每(?:个)?(工作日|天|日|(?:周|星期|礼拜)[一二三四五六日天])/.exec(original);
+      if (!match) return { title: original, label: '' };
+      const token = match[0];
+      let label = '每天';
+      if (match[1] === '工作日') label = '每个工作日';
+      else if (match[1] === '天' || match[1] === '日') label = '每天';
+      else label = '每' + match[1];
+      const title = (original.slice(0, match.index) + original.slice(match.index + token.length))
+        .replace(/^[\s,，。、;；:：\-—]+/, '')
+        .replace(/[\s,，。、;；:：\-—]+$/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return { title: title || original, label };
+    };
+    const parseNaturalTask = (text, baseKey) => {
+      const recurrence = stripNaturalRecurrence(text);
+      const dateParsed = parseNaturalDate(recurrence.title, baseKey);
+      const timeParsed = parseNaturalTime(dateParsed.title);
+      return {
+        title: timeParsed.title,
+        date: dateParsed.date,
+        startTime: timeParsed.startTime,
+        recurrenceLabel: recurrence.label,
+      };
     };
     const COLUMN_KEYS = ['id', 'title', 'module', 'priority', 'assignee', 'status'];
     const PINNED_KEY = 'dsh-zentao-pinned-v1';
@@ -1116,7 +1366,7 @@ window.__ModuleLoader__.load({
       const [items, setItems] = useState({ story: [], bug: [], task: [], testtask: [], report: [] });
       // 每次打开软件默认进入仪表盘；从今日待办提醒进入时直接落到「全员任务」。
       const initialReminder = todayTasksPending();
-      const [view, setView] = useState(() => (initialReminder ? 'team' : 'dashboard'));
+      const [view, setView] = useState(() => (initialReminder ? 'team' : loadDefaultView()));
       const [teamTasks, setTeamTasks] = useState({ loading: false, error: '', tasks: [], members: [], executions: [], loaded: false });
       const [teamFilters, setTeamFilters] = useState(() =>
         initialReminder
@@ -1314,6 +1564,9 @@ window.__ModuleLoader__.load({
       const [dayDetail, setDayDetail] = useState(null);
       const [dayResize, setDayResize] = useState(null);
       const [dayNow, setDayNow] = useState(() => new Date());
+      const [quickAddText, setQuickAddText] = useState('');
+      const [quickAddBusy, setQuickAddBusy] = useState(false);
+      const [quickAddMessage, setQuickAddMessage] = useState(null);
       const dayClickBlockedRef = useRef(0);
       const dayEstimateFixRef = useRef(new Set());
 
@@ -1551,6 +1804,7 @@ window.__ModuleLoader__.load({
       const storyImageInputRef = useRef(null);
       const itemDialogRef = useRef(null);
       const [settingsOpen, setSettingsOpen] = useState(false);
+      const [settingsTab, setSettingsTab] = useState('zentao');
       const [settingsLoading, setSettingsLoading] = useState(false);
       const [settingsSaving, setSettingsSaving] = useState(false);
       const [settingsError, setSettingsError] = useState('');
@@ -1561,6 +1815,7 @@ window.__ModuleLoader__.load({
         deepseekApiKey: '',
         deepseekBaseUrl: 'https://api.deepseek.com',
         deepseekModel: 'deepseek-chat',
+        defaultView: loadDefaultView(),
         hasPassword: false,
         hasDeepseekKey: false,
       });
@@ -2272,6 +2527,7 @@ window.__ModuleLoader__.load({
 
       const openSettings = async () => {
         setSettingsOpen(true);
+        setSettingsTab('zentao');
         setSettingsError('');
         setSettingsLoading(true);
         try {
@@ -2285,6 +2541,7 @@ window.__ModuleLoader__.load({
             deepseekApiKey: '',
             deepseekBaseUrl: data.deepseekBaseUrl || 'https://api.deepseek.com',
             deepseekModel: data.deepseekModel || 'deepseek-chat',
+            defaultView: loadDefaultView(),
             hasPassword: Boolean(data.hasPassword),
             hasDeepseekKey: Boolean(data.hasDeepseekKey),
           });
@@ -2321,6 +2578,7 @@ window.__ModuleLoader__.load({
             body: JSON.stringify(payload),
           });
           if (!res || !res.ok) throw new Error((res && res.error) || '保存设置失败');
+          saveDefaultView(settingsForm.defaultView || 'dashboard');
           setSettingsOpen(false);
           await refreshModels();
           loadTree();
@@ -3100,6 +3358,7 @@ window.__ModuleLoader__.load({
           setTaskModal(null);
           loadMyTasks(true);
           loadDashboard(true);
+          if (view === 'team') loadTeamTasks(true, { force: true });
           if (selection.executionId === iteration.id) loadItems(selection.executionId, true);
         } catch (error) {
           setTaskModal((prev) => (prev ? Object.assign({}, prev, { submitting: false, error: error.message }) : prev));
@@ -5308,6 +5567,149 @@ window.__ModuleLoader__.load({
         );
       }
 
+      const submitQuickAdd = async (event) => {
+        if (event) {
+          event.preventDefault();
+          if (event.stopPropagation) event.stopPropagation();
+        }
+        if (quickAddBusy) return;
+        const raws = quickAddText
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        if (!raws.length) return;
+        if (!me.account) {
+          setQuickAddMessage({ tone: 'error', text: '当前账号未加载，无法指派给自己' });
+          return;
+        }
+        setQuickAddBusy(true);
+        setQuickAddMessage(null);
+        const today = naturalTodayKey();
+        let created = 0;
+        let lastError = '';
+        const failed = [];
+        try {
+          const iterationRes = await api('/zentao/api/iterations');
+          if (!iterationRes || !iterationRes.ok) {
+            throw new Error((iterationRes && iterationRes.error) || '读取迭代失败');
+          }
+          const iterations = iterationRes.iterations || [];
+          // 快速添加固定落到「其他_001」，与默认迭代约定一致。
+          const target = iterations.find((item) => String(item.name || '').trim() === '其他_001');
+          if (!target) throw new Error('未找到迭代「其他_001」');
+          for (const raw of raws) {
+            try {
+              const parsed = parseNaturalTask(raw.replace(BATCH_LINE_PREFIX, ''), today);
+              const title = String(parsed.title || raw).trim();
+              if (!title) throw new Error('任务标题为空');
+              const deadline = parsed.date || today;
+              const res = await api('/zentao/api/task-create', {
+                method: 'POST',
+                headers: Object.assign({}, HEADERS, { 'content-type': 'application/json' }),
+                body: JSON.stringify({
+                  title,
+                  description: '',
+                  assignedTo: me.account,
+                  priority: 3,
+                  deadline,
+                  estStarted: deadline,
+                  estimate: parsed.startTime != null ? 0.5 : 0,
+                  executionId: target.id,
+                  projectId: target.projectId,
+                  storyId: 0,
+                }),
+              });
+              if (!res || !res.ok) throw new Error((res && res.error) || '创建任务失败');
+              const item = res.result || {};
+              if (parsed.startTime != null && item.id != null) {
+                setCalendarDayTimes((prev) => Object.assign({}, prev, { [String(item.id)]: Number(parsed.startTime) }));
+              }
+              created += 1;
+            } catch (error) {
+              failed.push(raw);
+              lastError = error && error.message ? error.message : String(error);
+            }
+          }
+          if (created) {
+            await loadMyTasks(true);
+            loadDashboard(true);
+          }
+          if (failed.length) {
+            setQuickAddText(failed.join('\n'));
+            setQuickAddMessage({
+              tone: 'error',
+              text:
+                '已添加 ' + created + ' 条，失败 ' + failed.length + ' 条' +
+                (lastError ? '：' + lastError : '，可再次提交重试'),
+            });
+          } else {
+            setQuickAddText('');
+            setQuickAddMessage({ tone: 'success', text: '已添加 ' + created + ' 条待办' });
+          }
+        } catch (error) {
+          setQuickAddMessage({ tone: 'error', text: error && error.message ? error.message : String(error) });
+        } finally {
+          setQuickAddBusy(false);
+        }
+      };
+
+      const renderQuickAdd = () =>
+        h(
+          'section',
+          { className: 'zt-quick-add', 'aria-label': '添加待办' },
+          h(
+            'div',
+            { className: 'zt-quick-add-head' },
+            h('div', { className: 'zt-quick-add-title' }, '添加待办'),
+            h('span', { className: 'zt-quick-add-hint' }, '支持日期、时间；多行会拆成多条'),
+          ),
+          h(
+            'div',
+            { className: 'zt-quick-add-row' },
+            h('span', { className: 'zt-quick-add-icon', 'aria-hidden': true }, h(GlyphIcon, { name: 'plus', size: 16 })),
+            h('textarea', {
+              className: 'zt-quick-add-input',
+              rows: 2,
+              value: quickAddText,
+              disabled: quickAddBusy,
+              spellCheck: false,
+              placeholder: '例如：今天上午九点做什么\n明天下午7点做什么',
+              'aria-label': '一句话添加待办，可写日期和时间',
+              onChange: (event) => {
+                setQuickAddText(event.target.value);
+                if (quickAddMessage) setQuickAddMessage(null);
+              },
+              onKeyDown: (event) => {
+                if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent?.isComposing) return;
+                event.preventDefault();
+                submitQuickAdd(event);
+              },
+            }),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'zt-btn zt-btn-primary zt-quick-add-btn',
+                disabled: quickAddBusy || !quickAddText.trim(),
+                onClick: submitQuickAdd,
+              },
+              quickAddBusy ? '添加中…' : '添加',
+            ),
+          ),
+          h(
+            'div',
+            { className: 'zt-quick-add-meta' },
+            '默认指派给自己 · 迭代「其他_001」 · 优先级 P3 · 重复词按单次创建 · Enter 添加，Shift+Enter 换行',
+          ),
+          quickAddMessage
+            ? h(
+                'div',
+                { className: 'zt-quick-add-msg' + (quickAddMessage.tone === 'error' ? ' is-error' : ' is-success'), role: 'status' },
+                quickAddMessage.text,
+              )
+            : null,
+        );
+
       const renderCalendar = () => {
         const isWeek = calendarMode === 'week';
         const isDay = calendarMode === 'day';
@@ -6970,6 +7372,7 @@ window.__ModuleLoader__.load({
                 }),
               )
             : null,
+          data ? renderQuickAdd() : null,
           data ? renderCalendar() : null,
         );
       };
@@ -7116,6 +7519,13 @@ window.__ModuleLoader__.load({
         const counts = teamTasks.tabCounts || { open: 0, closed: 0 };
         const openCount = counts.open || 0;
         const closedCount = counts.closed || 0;
+        const openCreateTask = () => {
+          const now = new Date();
+          const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+          const activeFilters = activeTab === 'closed' ? closedFilters : teamFilters;
+          const executionId = activeFilters.execution || (selection && selection.executionId) || '';
+          openTaskModal(todayKey, executionId);
+        };
         return h(
           'div',
           { className: 'zt-team-head' },
@@ -7155,6 +7565,12 @@ window.__ModuleLoader__.load({
                 onClick: () => loadTeamTasks(true, { force: true }),
               },
               h(GlyphIcon, { name: 'refresh', size: 16 }),
+            ),
+            h(
+              'button',
+              { className: 'zt-btn zt-btn-primary zt-team-new', type: 'button', onClick: openCreateTask },
+              h(GlyphIcon, { name: 'plus', size: 14 }),
+              h('span', null, '新建任务'),
             ),
             h(
               'button',
@@ -7376,7 +7792,7 @@ window.__ModuleLoader__.load({
               value: closedFilters.q,
               onChange: (event) => patchFilters({ q: event.target.value }),
             }),
-            h('button', { className: 'zt-chip-btn', type: 'button', onClick: () => patchFilters({ member: '', execution: '', start: '', end: '', q: '' }) }, '清除筛选'),
+            h('button', { className: 'zt-chip-btn zt-chip-btn-primary', type: 'button', onClick: () => patchFilters({ member: '', execution: '', start: '', end: '', q: '' }) }, '清除筛选'),
           ),
           renderTeamBulkBar(),
           h(
@@ -7630,7 +8046,7 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'zt-team-overview-head' },
               h('span', { className: 'zt-team-overview-title' }, '任务总览'),
-              h('span', { className: 'zt-team-overview-hint' }, '按截止完成时间 / 迭代 / 成员筛选 · 不含已关闭任务'),
+              h('span', { className: 'zt-team-overview-hint' }, '待办/已完成按时间区间筛选 · 延期/今天不受时间区间限制'),
             ),
             cards.length
               ? h(
@@ -7649,11 +8065,33 @@ window.__ModuleLoader__.load({
                           {
                             className: 'zt-team-card-metric',
                             type: 'button',
-                            title: '筛选 ' + entry.label + ' 待完成的任务',
+                            title: '筛选 ' + entry.label + ' 待办的任务',
                             onClick: () => patchFilters({ member: entry.key, status: '__todo__' }),
                           },
                           h('span', { className: 'zt-team-card-value zt-team-card-value-todo' }, String(entry.todo)),
-                          h('span', { className: 'zt-team-card-label' }, '待完成'),
+                          h('span', { className: 'zt-team-card-label' }, '待办'),
+                        ),
+                        h(
+                          'button',
+                          {
+                            className: 'zt-team-card-metric',
+                            type: 'button',
+                            title: '筛选 ' + entry.label + ' 延期的任务',
+                            onClick: () => patchFilters({ member: entry.key, status: '__overdue__', start: '', end: '' }),
+                          },
+                          h('span', { className: 'zt-team-card-value zt-team-card-value-overdue' }, String(entry.overdue || 0)),
+                          h('span', { className: 'zt-team-card-label' }, '延期'),
+                        ),
+                        h(
+                          'button',
+                          {
+                            className: 'zt-team-card-metric',
+                            type: 'button',
+                            title: '筛选 ' + entry.label + ' 今天到期的任务',
+                            onClick: () => patchFilters({ member: entry.key, status: '__today__', start: '', end: '' }),
+                          },
+                          h('span', { className: 'zt-team-card-value zt-team-card-value-today' }, String(entry.today || 0)),
+                          h('span', { className: 'zt-team-card-label' }, '今天'),
                         ),
                         h(
                           'button',
@@ -7712,7 +8150,9 @@ window.__ModuleLoader__.load({
               'select',
               { className: 'zt-team-input zt-team-select', value: teamFilters.status, onChange: (event) => patchFilters({ status: event.target.value }) },
               h('option', { value: '' }, '全部状态'),
-              h('option', { value: '__todo__' }, '待完成（未开始/进行中）'),
+              h('option', { value: '__todo__' }, '待办（未开始/进行中）'),
+              h('option', { value: '__overdue__' }, '延期（未开始/进行中）'),
+              h('option', { value: '__today__' }, '今天到期（未开始/进行中）'),
               h('option', { value: '__done__' }, '已完成'),
               ['wait', 'doing', 'done', 'pause', 'cancel'].map((key) =>
                 h('option', { key, value: key }, { wait: '未开始', doing: '进行中', done: '已完成', pause: '已暂停', cancel: '已取消' }[key]),
@@ -7724,7 +8164,7 @@ window.__ModuleLoader__.load({
               value: teamFilters.q,
               onChange: (event) => patchFilters({ q: event.target.value }),
             }),
-            h('button', { className: 'zt-chip-btn', type: 'button', onClick: () => patchFilters({ member: '', execution: '', status: '', start: '', end: '', q: '' }) }, '清除筛选'),
+            h('button', { className: 'zt-chip-btn zt-chip-btn-primary', type: 'button', onClick: () => patchFilters({ member: '', execution: '', status: '', start: '', end: '', q: '' }) }, '清除筛选'),
           ),
           renderTeamBulkBar(),
           h(
@@ -7786,11 +8226,12 @@ window.__ModuleLoader__.load({
                       'tbody',
                       null,
                       rows.map((item) => {
-                        const overdue =
-                          !item.done &&
-                          !['done', 'closed', 'cancel'].includes(item.status) &&
-                          /^\d{4}-\d{2}-\d{2}$/.test(String(item.deadline || '')) &&
-                          item.deadline < new Date().toISOString().slice(0, 10);
+                        const now = new Date();
+                        const teamToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                        const isOpenTask = item.status === 'wait' || item.status === 'doing';
+                        const hasDeadline = /^\d{4}-\d{2}-\d{2}$/.test(String(item.deadline || ''));
+                        const overdue = isOpenTask && hasDeadline && item.deadline < teamToday;
+                        const dueToday = isOpenTask && hasDeadline && item.deadline === teamToday;
                         return h(
                           'tr',
                           { key: item.id },
@@ -7827,7 +8268,7 @@ window.__ModuleLoader__.load({
                           h(
                             'td',
                             { className: 'zt-cell-editable', title: '点击修改截止日期', onClick: (event) => openCellEditor(item, 'deadline', event) },
-                            item.deadline ? h('span', { className: 'zt-team-date-value' + (overdue ? ' zt-team-date-overdue' : '') }, shortListDate(item.deadline)) : '—',
+                            item.deadline ? h('span', { className: 'zt-team-date-value' + (overdue ? ' zt-team-date-overdue' : dueToday ? ' zt-team-date-today' : '') }, shortListDate(item.deadline)) : '—',
                           ),
                           h('td', null, overdue ? h('span', { className: 'zt-team-overdue-text' }, '延期') : '-'),
                           h(
@@ -8006,6 +8447,8 @@ window.__ModuleLoader__.load({
         );
       })();
 
+      const showProjectPane = view === 'list' && layout.leftOpen;
+
       return h(
         'div',
         {
@@ -8013,8 +8456,8 @@ window.__ModuleLoader__.load({
             // lightsPad = how much of the panel's left edge is under the lights;
             // target content x ≈ 84px, and the collapsed rail eats 48px of that.
             '--zt-pane-head-pad': Math.max(16, 8 + lightsPad) + 'px',
-            '--zt-main-head-pad': Math.max(16, lightsPad - 32) + 'px',
-            '--zt-left-w': (layout.leftOpen ? layout.leftW : 0) + 'px',
+            '--zt-main-head-pad': Math.max(16, lightsPad - 76) + 'px',
+            '--zt-left-w': (showProjectPane ? layout.leftW : 0) + 'px',
           },
           className:
             'zt-root' +
@@ -8436,7 +8879,7 @@ window.__ModuleLoader__.load({
               },
               h(
                 'div',
-                { className: 'zt-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': '设置' },
+                { className: 'zt-modal zt-modal-settings', role: 'dialog', 'aria-modal': 'true', 'aria-label': '设置' },
                 h(
                   'div',
                   { className: 'zt-modal-head' },
@@ -8449,123 +8892,194 @@ window.__ModuleLoader__.load({
                 ),
                 h(
                   'div',
-                  { className: 'zt-modal-body' },
-                  settingsLoading
-                    ? h('div', { className: 'zt-modal-hint' }, '正在读取设置…')
-                    : [
+                  { className: 'zt-modal-body zt-settings-body' },
+                  h(
+                    'div',
+                    { className: 'zt-settings-layout' },
+                    h(
+                      'div',
+                      { className: 'zt-settings-nav', role: 'tablist', 'aria-label': '设置分类' },
+                      [
+                        { key: 'zentao', label: '禅道连接' },
+                        { key: 'deepseek', label: 'DeepSeek API' },
+                        { key: 'prefs', label: '提醒与界面' },
+                      ].map((item) =>
                         h(
-                          'div',
-                          { key: 'zt-title', className: 'zt-modal-section' },
-                          '禅道连接',
+                          'button',
+                          {
+                            key: item.key,
+                            className: 'zt-settings-tab' + (settingsTab === item.key ? ' zt-settings-tab-active' : ''),
+                            type: 'button',
+                            role: 'tab',
+                            'aria-selected': settingsTab === item.key ? 'true' : 'false',
+                            onClick: () => setSettingsTab(item.key),
+                          },
+                          item.label,
                         ),
-                        h(
-                          'label',
-                          { key: 'baseUrl', className: 'zt-field' },
-                          fieldLabel('禅道地址', true),
-                          h('input', {
-                            className: 'zt-input',
-                            value: settingsForm.baseUrl,
-                            placeholder: 'http://127.0.0.1:8080',
-                            onChange: (event) =>
-                              setSettingsForm((prev) => Object.assign({}, prev, { baseUrl: event.target.value })),
-                          }),
-                        ),
-                        h(
-                          'label',
-                          { key: 'account', className: 'zt-field' },
-                          fieldLabel('账号', true),
-                          h('input', {
-                            className: 'zt-input',
-                            value: settingsForm.account,
-                            onChange: (event) =>
-                              setSettingsForm((prev) => Object.assign({}, prev, { account: event.target.value })),
-                          }),
-                        ),
-                        h(
-                          'label',
-                          { key: 'password', className: 'zt-field' },
-                          fieldLabel('密码', false),
-                          h('input', {
-                            className: 'zt-input',
-                            type: 'password',
-                            value: settingsForm.password,
-                            placeholder: settingsForm.hasPassword ? '已保存，留空不修改' : '请输入禅道密码',
-                            onChange: (event) =>
-                              setSettingsForm((prev) => Object.assign({}, prev, { password: event.target.value })),
-                          }),
-                        ),
-                        h('div', { key: 'ds-title', className: 'zt-modal-section' }, 'DeepSeek API'),
-                        h(
-                          'label',
-                          { key: 'ds-key', className: 'zt-field' },
-                          fieldLabel('API Key', false),
-                          h('input', {
-                            className: 'zt-input',
-                            type: 'password',
-                            value: settingsForm.deepseekApiKey,
-                            placeholder: settingsForm.hasDeepseekKey ? '已保存，留空不修改' : '留空则使用 DSH 当前模型',
-                            onChange: (event) =>
-                              setSettingsForm((prev) => Object.assign({}, prev, { deepseekApiKey: event.target.value })),
-                          }),
-                        ),
-                        h(
-                          'label',
-                          { key: 'ds-base', className: 'zt-field' },
-                          fieldLabel('API 地址', false),
-                          h('input', {
-                            className: 'zt-input',
-                            value: settingsForm.deepseekBaseUrl,
-                            placeholder: 'https://api.deepseek.com',
-                            onChange: (event) =>
-                              setSettingsForm((prev) => Object.assign({}, prev, { deepseekBaseUrl: event.target.value })),
-                          }),
-                        ),
-                        h(
-                          'label',
-                          { key: 'ds-model', className: 'zt-field' },
-                          fieldLabel('默认模型', false),
-                          h(
-                            'select',
-                            {
-                              className: 'zt-input',
-                              value: settingsForm.deepseekModel,
-                              onChange: (event) =>
-                                setSettingsForm((prev) => Object.assign({}, prev, { deepseekModel: event.target.value })),
-                            },
-                            [...new Set([settingsForm.deepseekModel, ...modelInfo.models].filter(Boolean))].map((model) =>
-                              h('option', { key: model, value: model }, model),
-                            ),
-                          ),
-                        ),
-                        h('div', { key: 'reminder-title', className: 'zt-modal-section' }, '提醒'),
-                        h(
-                          'div',
-                          { key: 'reminder', className: 'zt-setting-row' },
-                          h(
-                            'div',
-                            { className: 'zt-setting-copy' },
-                            h('div', { className: 'zt-setting-label' }, '启动时提醒今日待办'),
-                            h('div', { className: 'zt-setting-desc' }, '打开 DSH 后，在右下角提示今天到期或已逾期的未完成任务。'),
-                          ),
-                          h(
-                            'button',
-                            {
-                              className: 'zt-switch' + (todayReminderOn ? ' zt-switch-on' : ''),
-                              type: 'button',
-                              role: 'switch',
-                              'aria-checked': todayReminderOn ? 'true' : 'false',
-                              title: todayReminderOn ? '关闭今日待办提醒' : '开启今日待办提醒',
-                              onClick: () => {
-                                const next = !todayReminderOn;
-                                setTodayReminderOn(next);
-                                setTodayReminderEnabled(next);
-                              },
-                            },
-                            h('span', { className: 'zt-switch-handle', 'aria-hidden': true }),
-                          ),
-                        ),
-                        settingsError ? h('div', { key: 'err', className: 'zt-field-error' }, settingsError) : null,
-                      ],
+                      ),
+                    ),
+                    h(
+                      'div',
+                      { className: 'zt-settings-panel', role: 'tabpanel' },
+                      settingsLoading
+                        ? h('div', { className: 'zt-modal-hint' }, '正在读取设置…')
+                        : settingsTab === 'zentao'
+                          ? h(
+                              'div',
+                              { className: 'zt-settings-group' },
+                              h(
+                                'div',
+                                { key: 'heading', className: 'zt-settings-heading' },
+                                h('div', { className: 'zt-settings-title' }, '禅道连接'),
+                                h('div', { className: 'zt-settings-sub' }, '配置禅道服务器地址与登录账号。'),
+                              ),
+                              h(
+                                'label',
+                                { key: 'baseUrl', className: 'zt-field' },
+                                fieldLabel('禅道地址', true),
+                                h('input', {
+                                  className: 'zt-input',
+                                  value: settingsForm.baseUrl,
+                                  placeholder: 'http://127.0.0.1:8080',
+                                  onChange: (event) =>
+                                    setSettingsForm((prev) => Object.assign({}, prev, { baseUrl: event.target.value })),
+                                }),
+                              ),
+                              h(
+                                'label',
+                                { key: 'account', className: 'zt-field' },
+                                fieldLabel('账号', true),
+                                h('input', {
+                                  className: 'zt-input',
+                                  value: settingsForm.account,
+                                  onChange: (event) =>
+                                    setSettingsForm((prev) => Object.assign({}, prev, { account: event.target.value })),
+                                }),
+                              ),
+                              h(
+                                'label',
+                                { key: 'password', className: 'zt-field' },
+                                fieldLabel('密码', false),
+                                h('input', {
+                                  className: 'zt-input',
+                                  type: 'password',
+                                  value: settingsForm.password,
+                                  placeholder: settingsForm.hasPassword ? '已保存，留空不修改' : '请输入禅道密码',
+                                  onChange: (event) =>
+                                    setSettingsForm((prev) => Object.assign({}, prev, { password: event.target.value })),
+                                }),
+                              ),
+                            )
+                          : settingsTab === 'deepseek'
+                            ? h(
+                                'div',
+                                { className: 'zt-settings-group' },
+                                h(
+                                  'div',
+                                  { key: 'heading', className: 'zt-settings-heading' },
+                                  h('div', { className: 'zt-settings-title' }, 'DeepSeek API'),
+                                  h('div', { className: 'zt-settings-sub' }, '配置插件内对话使用的模型服务。'),
+                                ),
+                                h(
+                                  'label',
+                                  { key: 'ds-key', className: 'zt-field' },
+                                  fieldLabel('API Key', false),
+                                  h('input', {
+                                    className: 'zt-input',
+                                    type: 'password',
+                                    value: settingsForm.deepseekApiKey,
+                                    placeholder: settingsForm.hasDeepseekKey ? '已保存，留空不修改' : '留空则使用 DSH 当前模型',
+                                    onChange: (event) =>
+                                      setSettingsForm((prev) => Object.assign({}, prev, { deepseekApiKey: event.target.value })),
+                                  }),
+                                ),
+                                h(
+                                  'label',
+                                  { key: 'ds-base', className: 'zt-field' },
+                                  fieldLabel('API 地址', false),
+                                  h('input', {
+                                    className: 'zt-input',
+                                    value: settingsForm.deepseekBaseUrl,
+                                    placeholder: 'https://api.deepseek.com',
+                                    onChange: (event) =>
+                                      setSettingsForm((prev) => Object.assign({}, prev, { deepseekBaseUrl: event.target.value })),
+                                  }),
+                                ),
+                                h(
+                                  'label',
+                                  { key: 'ds-model', className: 'zt-field' },
+                                  fieldLabel('默认模型', false),
+                                  h(
+                                    'select',
+                                    {
+                                      className: 'zt-input',
+                                      value: settingsForm.deepseekModel,
+                                      onChange: (event) =>
+                                        setSettingsForm((prev) => Object.assign({}, prev, { deepseekModel: event.target.value })),
+                                    },
+                                    [...new Set([settingsForm.deepseekModel, ...modelInfo.models].filter(Boolean))].map((model) =>
+                                      h('option', { key: model, value: model }, model),
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : h(
+                                'div',
+                                { className: 'zt-settings-group' },
+                                h(
+                                  'div',
+                                  { key: 'heading', className: 'zt-settings-heading' },
+                                  h('div', { className: 'zt-settings-title' }, '提醒与界面'),
+                                  h('div', { className: 'zt-settings-sub' }, '设置启动提醒与默认打开的页面。'),
+                                ),
+                                h(
+                                  'div',
+                                  { key: 'reminder', className: 'zt-setting-row' },
+                                  h(
+                                    'div',
+                                    { className: 'zt-setting-copy' },
+                                    h('div', { className: 'zt-setting-label' }, '启动时提醒今日待办'),
+                                    h('div', { className: 'zt-setting-desc' }, '打开 DSH 后，在右下角提示今天到期或已逾期的未完成任务。'),
+                                  ),
+                                  h(
+                                    'button',
+                                    {
+                                      className: 'zt-switch' + (todayReminderOn ? ' zt-switch-on' : ''),
+                                      type: 'button',
+                                      role: 'switch',
+                                      'aria-checked': todayReminderOn ? 'true' : 'false',
+                                      title: todayReminderOn ? '关闭今日待办提醒' : '开启今日待办提醒',
+                                      onClick: () => {
+                                        const next = !todayReminderOn;
+                                        setTodayReminderOn(next);
+                                        setTodayReminderEnabled(next);
+                                      },
+                                    },
+                                    h('span', { className: 'zt-switch-handle', 'aria-hidden': true }),
+                                  ),
+                                ),
+                                h(
+                                  'label',
+                                  { key: 'default-view', className: 'zt-field' },
+                                  fieldLabel('默认打开的视图', false),
+                                  h(
+                                    'select',
+                                    {
+                                      className: 'zt-input',
+                                      value: settingsForm.defaultView || 'dashboard',
+                                      onChange: (event) =>
+                                        setSettingsForm((prev) => Object.assign({}, prev, { defaultView: event.target.value })),
+                                    },
+                                    DEFAULT_VIEW_OPTIONS.map((option) =>
+                                      h('option', { key: option.value, value: option.value }, option.label),
+                                    ),
+                                  ),
+                                  h('span', { className: 'zt-field-hint' }, '下次打开插件时生效；今日待办提醒仍会直接进入任务列表。'),
+                                ),
+                              ),
+                      settingsError ? h('div', { key: 'err', className: 'zt-field-error' }, settingsError) : null,
+                    ),
+                  ),
                 ),
                 h(
                   'div',
@@ -8580,65 +9094,128 @@ window.__ModuleLoader__.load({
               ),
             )
           : null,
-        layout.leftOpen
-          ? h(
-              'aside',
-              { className: 'zt-pane zt-left', style: { width: layout.leftW } },
-              h(
-                'div',
-                { className: 'zt-pane-head' },
-                h(
+        h(
+          'nav',
+          { className: 'zt-nav', 'aria-label': '页面切换' },
+          h('div', { className: 'zt-nav-spacer', 'aria-hidden': true }),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'zt-nav-btn' + (view === 'dashboard' ? ' zt-nav-btn-active' : ''),
+              title: '仪表盘',
+              'aria-label': '仪表盘',
+              'aria-pressed': view === 'dashboard',
+              onClick: () => switchView('dashboard'),
+            },
+            h(Icon, { size: 20 }),
+            h('span', null, '仪表盘'),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'zt-nav-btn' + (view === 'list' ? ' zt-nav-btn-active' : ''),
+              title: '项目',
+              'aria-label': '项目',
+              'aria-pressed': view === 'list',
+              onClick: () => switchView('list'),
+            },
+            h(GlyphIcon, { name: 'folder', size: 20 }),
+            h('span', null, '项目'),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'zt-nav-btn' + (view === 'team' ? ' zt-nav-btn-active' : ''),
+              title: '任务',
+              'aria-label': '任务',
+              'aria-pressed': view === 'team',
+              onClick: () => switchView('team'),
+            },
+            h(GlyphIcon, { name: 'view-list', size: 20 }),
+            h('span', null, '任务'),
+          ),
+          view === 'list'
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'zt-nav-btn zt-nav-collapse',
+                  title: layout.leftOpen ? '收起项目/迭代' : '展开项目/迭代',
+                  'aria-label': layout.leftOpen ? '收起项目/迭代' : '展开项目/迭代',
+                  onClick: () => setLayout((l) => Object.assign({}, l, { leftOpen: !l.leftOpen })),
+                },
+                h(GlyphIcon, { name: layout.leftOpen ? 'chevron-left' : 'chevron-right', size: 18 }),
+                h('span', null, layout.leftOpen ? '收起' : '展开'),
+              )
+            : null,
+          h(
+            'div',
+            { className: 'zt-nav-foot' },
+            h(
+              'button',
+              {
+                className: 'zt-nav-mini',
+                type: 'button',
+                title: assignEvents.unread ? '指派提醒（' + assignEvents.unread + ' 条未读）' : '指派提醒',
+                'aria-label': '指派提醒',
+                onClick: () => setAssignMenuOpen((v) => !v),
+              },
+              h(GlyphIcon, { name: 'bell', size: 15 }),
+              assignEvents.unread ? h('span', { className: 'zt-bell-dot', 'aria-hidden': true }) : null,
+            ),
+            h(
+              'button',
+              {
+                className: 'zt-nav-mini',
+                type: 'button',
+                title: '设置禅道账号与模型',
+                'aria-label': '设置',
+                onClick: openSettings,
+              },
+              h(GlyphIcon, { name: 'settings', size: 15 }),
+            ),
+            h(
+              'button',
+              {
+                className: 'zt-nav-mini' + (updateState.checking ? ' zt-spinning' : ''),
+                type: 'button',
+                title: '检查版本更新（当前 ' + PLUGIN_VERSION + '）',
+                'aria-label': '检查版本更新',
+                disabled: updateState.checking,
+                onClick: checkForUpdates,
+              },
+              h(GlyphIcon, { name: 'refresh', size: 15 }),
+              updateState.available ? h('span', { className: 'zt-update-dot', 'aria-hidden': true }) : null,
+            ),
+            h('span', { className: 'zt-nav-version', title: '禅道 AI 工作台版本' }, PLUGIN_VERSION),
+            updateState.text
+              ? h(
                   'div',
-                  { className: 'zt-head-actions' },
-                  h(
-                    'div',
-                    { className: 'zt-view-switch', role: 'tablist', 'aria-label': '页面切换' },
-                    h(
-                      'button',
-                      {
-                        type: 'button',
-                        role: 'tab',
-                        'aria-selected': view === 'dashboard' ? 'true' : 'false',
-                        className: 'zt-view-btn' + (view === 'dashboard' ? ' zt-view-btn-active' : ''),
-                        onClick: () => switchView('dashboard'),
-                      },
-                      '仪表盘',
-                    ),
-                    h(
-                      'button',
-                      {
-                        type: 'button',
-                        role: 'tab',
-                        'aria-selected': view === 'list' ? 'true' : 'false',
-                        className: 'zt-view-btn' + (view === 'list' ? ' zt-view-btn-active' : ''),
-                        onClick: () => switchView('list'),
-                      },
-                      '项目',
-                    ),
-                    h(
-                      'button',
-                      {
-                        type: 'button',
-                        role: 'tab',
-                        'aria-selected': view === 'team' ? 'true' : 'false',
-                        className: 'zt-view-btn' + (view === 'team' ? ' zt-view-btn-active' : ''),
-                        onClick: () => switchView('team'),
-                      },
-                      '任务',
-                    ),
-                  ),
+                  { className: 'zt-update-pop zt-update-pop-' + (updateState.tone || 'info') },
+                  h('span', { className: 'zt-update-pop-text' }, updateState.text),
                   h(
                     'button',
                     {
-                      className: 'zt-icon-btn',
-                      title: '收起左栏',
-                      'aria-label': '收起左栏',
-                      onClick: () => setLayout((l) => Object.assign({}, l, { leftOpen: false })),
+                      className: 'zt-update-pop-close',
+                      type: 'button',
+                      title: '关闭',
+                      'aria-label': '关闭',
+                      onClick: () => setUpdateState((prev) => Object.assign({}, prev, { text: '', available: '' })),
                     },
-                    h(GlyphIcon, { name: 'chevron-left', size: 16 }),
+                    h(GlyphIcon, { name: 'close', size: 12 }),
                   ),
-                ),
-              ),
+                )
+              : null,
+            assignMenuOpen ? renderAssignMenu() : null,
+          ),
+        ),
+        showProjectPane
+          ? h(
+              'aside',
+              { className: 'zt-pane zt-left', style: { width: layout.leftW } },
               h(
                 'div',
                 { className: 'zt-tree-filter-row' },
@@ -8989,21 +9566,8 @@ window.__ModuleLoader__.load({
                 assignMenuOpen ? renderAssignMenu() : null,
               ),
             )
-          : h(
-              'div',
-              { className: 'zt-rail zt-rail-left' },
-              h(
-                'button',
-                {
-                  className: 'zt-icon-btn',
-                  title: '展开项目/迭代',
-                  'aria-label': '展开项目/迭代',
-                  onClick: () => setLayout((l) => Object.assign({}, l, { leftOpen: true })),
-                },
-                h(GlyphIcon, { name: 'chevron-right', size: 16 }),
-              ),
-            ),
-        layout.leftOpen ? h('div', { className: 'zt-split', onMouseDown: (e) => startDrag('left', e) }) : null,
+          : null,
+        showProjectPane ? h('div', { className: 'zt-split', onMouseDown: (e) => startDrag('left', e) }) : null,
         h(
           'main',
           {
@@ -10198,6 +10762,25 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-root *,.zt-root *:before,.zt-root *:after{box-sizing:border-box}
 .zt-pane{display:flex;flex:0 0 auto;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--td-bg-color-container)}
 .zt-left{position:relative;background:var(--dsw-specific-sidebar-fill,var(--td-bg-color-secondarycontainer))}
+.zt-nav{flex:0 0 76px;width:76px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 0 14px;background:#2f7cf6;z-index:2;user-select:none;-webkit-app-region:no-drag}
+.zt-under-lights .zt-nav{padding-top:57px}
+.zt-nav-spacer{flex:0 0 60px;width:60px;height:60px}
+.zt-nav-btn{width:60px;height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;border:0;border-radius:12px;background:transparent;color:rgba(255,255,255,.86);font:500 11px/1 var(--td-font-family);cursor:pointer;transition:background-color .15s,color .15s}
+.zt-nav-btn:hover{background:rgba(255,255,255,.16);color:#fff}
+.zt-nav-btn-active,.zt-nav-btn-active:hover{background:#fff;color:#2f7cf6}
+.zt-nav-foot{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:2px;width:100%;padding:6px 0 2px;position:relative}
+.zt-nav-mini{position:relative;width:38px;height:30px;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:9px;background:transparent;color:rgba(255,255,255,.82);cursor:pointer;transition:background-color .15s,color .15s}
+.zt-nav-mini:hover{background:rgba(255,255,255,.16);color:#fff}
+.zt-nav-mini:disabled{opacity:.55;cursor:default}
+.zt-nav-mini.zt-spinning svg{animation:zt-spin .9s linear infinite}
+.zt-nav-mini .zt-bell-dot{top:4px;right:5px;box-shadow:0 0 0 1.5px #2f7cf6}
+.zt-nav-mini .zt-update-dot{position:absolute;top:4px;right:5px}
+.zt-nav-version{font-size:9px;line-height:1;color:rgba(255,255,255,.55);letter-spacing:.2px;user-select:none}
+.zt-nav-foot .zt-update-pop{left:calc(100% + 10px);right:auto;bottom:6px;width:250px}
+.zt-nav-foot .zt-assign-menu{left:calc(100% + 10px);right:auto;bottom:6px;width:300px;max-width:calc(100vw - 100px)}
+.zt-nav-collapse{height:52px;margin-top:40px}
+body[data-ds-dark-theme] .zt-root .zt-nav{background:#245fd6}
+body[data-ds-dark-theme] .zt-root .zt-nav-btn-active,body[data-ds-dark-theme] .zt-root .zt-nav-btn-active:hover{background:#fff;color:#245fd6}
 .zt-main{position:relative;flex:1 1 0;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--td-bg-color-container);container-type:inline-size}
 .zt-main-dragstrip{position:absolute;left:0;right:0;top:0;height:14px;z-index:6;-webkit-app-region:drag}
 .zt-split{flex:0 0 8px;width:8px;cursor:col-resize;background:transparent;position:relative;z-index:2}
@@ -10211,6 +10794,7 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-under-lights .zt-left .zt-pane-head{padding-left:var(--zt-pane-head-pad,16px)}
 .zt-under-lights.zt-left-closed .zt-main-head{padding-left:var(--zt-main-head-pad,16px)}
 :is(html,body):has([data-sidebar-collapsed]) .zt-root.zt-left-closed .zt-main-head .zt-tabs,:is(html,body):has([data-sidebar-collapsed]) .zt-root.zt-left-closed .zt-team-head .zt-tabs{margin-left:100px}
+:is(html,body):has([data-sidebar-collapsed]) .zt-root .zt-dash-title-wrap,:is(html,body):has([data-sidebar-collapsed]) .zt-root .zt-main-head .zt-tabs,:is(html,body):has([data-sidebar-collapsed]) .zt-root .zt-team-head .zt-team-title-wrap,:is(html,body):has([data-sidebar-collapsed]) .zt-root .zt-tree-filter-label{margin-left:100px}
 .zt-pane-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px 0 16px;border-bottom:1px solid var(--td-component-stroke);height:48px;min-height:48px;min-width:0;-webkit-app-region:drag}
 .zt-pane-title{font:var(--td-font-title-small);color:var(--td-text-color-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;transition:max-width .22s cubic-bezier(.4,0,.2,1),opacity .12s linear}
 .zt-head-actions{display:flex;align-items:center;gap:4px;margin-left:auto;-webkit-app-region:no-drag}
@@ -10246,6 +10830,7 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-tree-busy{font-size:12px;line-height:20px;color:var(--td-text-color-secondary);padding:4px 8px}
 .zt-tree{padding:6px 8px 10px}
 .zt-left-foot{position:relative;flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 10px 6px;border-top:1px solid var(--td-component-stroke)}
+.zt-left-foot{display:none}
 .zt-foot-left,.zt-foot-right{display:flex;align-items:center;gap:8px;flex:0 0 auto;min-width:0}
 .zt-plugin-version{flex:0 0 auto;min-width:0;padding:4px 0;font-size:11px;line-height:16px;color:var(--td-text-color-placeholder);user-select:none}
 .zt-pinned{padding:0 0 6px;margin:0 0 6px;border-bottom:1px solid var(--td-component-stroke)}
@@ -10333,11 +10918,13 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-main-team{overflow:hidden}
 .zt-team-wrap{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--td-bg-color-container);overflow:hidden}
 .zt-team{flex:1;min-height:0;display:flex;flex-direction:column;padding:0;gap:0;min-width:0}
-.zt-team-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;padding:0 16px;border-bottom:1px solid var(--td-component-stroke);-webkit-app-region:drag}
+.zt-team-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;flex:0 0 auto;padding:0 16px 6px;border-bottom:1px solid var(--td-component-stroke);-webkit-app-region:drag}
 .zt-team-head .zt-tabs,.zt-team-head .zt-team-actions,.zt-team-head button,.zt-team-head select,.zt-team-head a{-webkit-app-region:no-drag}
 .zt-team-title-wrap{display:flex;align-items:stretch;min-width:0}
-.zt-team-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.zt-team-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto;margin-left:auto}
 .zt-team-export{height:30px;padding:0 14px;font-size:12px}
+.zt-team-new{display:inline-flex;align-items:center;gap:5px;height:30px;padding:0 12px;font-size:12px;white-space:nowrap}
+.zt-team-new svg{flex:0 0 auto}
 .zt-team-filters{display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:0 0 auto;margin:0;padding:10px 16px;border:0;border-bottom:1px solid var(--td-component-stroke);border-radius:0;background:transparent}
 .zt-team-filter-label{font-size:12px;line-height:18px;color:var(--td-text-color-secondary);white-space:nowrap}
 .zt-team-input{box-sizing:border-box;height:30px;min-height:30px;padding:0 8px;border:1px solid var(--td-component-stroke);border-radius:6px;background:var(--td-bg-color-container);color:var(--td-text-color-primary);font-size:12px;line-height:28px;outline:none}
@@ -10354,6 +10941,7 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-team-bulk-date{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--td-text-color-secondary);white-space:nowrap}
 .zt-team-bulk-date .zt-team-input{width:132px}
 .zt-chip-btn.zt-chip-btn-active,.zt-chip-btn.zt-chip-btn-active:hover{background:var(--td-brand-color-light);border-color:var(--td-brand-color);color:var(--td-brand-color)}
+.zt-chip-btn.zt-chip-btn-primary,.zt-chip-btn.zt-chip-btn-primary:hover{background:var(--td-brand-color);border-color:var(--td-brand-color);color:#fff}
 .zt-team-range{display:flex;align-items:center;gap:6px;height:30px;min-width:250px;padding:0 8px;border:1px solid var(--td-component-stroke);border-radius:6px;background:var(--td-bg-color-container);box-sizing:border-box}
 .zt-team-range:focus-within{border-color:var(--td-brand-color);box-shadow:0 0 0 2px var(--td-brand-color-focus)}
 .zt-team-range-text{width:96px;min-width:0;padding:0;border:0;background:transparent;color:var(--td-text-color-primary);font-size:12px;line-height:28px;outline:none;cursor:pointer}
@@ -10367,18 +10955,21 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 .zt-team-overview-title{font-size:13px;font-weight:600;color:var(--td-text-color-primary)}
 .zt-team-overview-hint{font-size:11px;color:var(--td-text-color-placeholder)}
 .zt-team-cards{display:flex;flex-wrap:wrap;justify-content:flex-start;gap:12px;align-items:stretch}
-.zt-team-card{flex:0 1 180px;width:180px;max-width:100%;min-width:0}
+.zt-team-card{flex:0 1 240px;width:240px;max-width:100%;min-width:0}
 .zt-team-card{position:relative;display:flex;flex-direction:column;gap:6px;min-width:0;min-height:112px;padding:14px 18px 12px 20px;border:1px solid var(--td-component-stroke);border-radius:16px;background:var(--td-bg-color-container);box-shadow:0 2px 8px rgba(0,0,0,.06);transition:box-shadow .2s,border-color .2s,transform .2s}
 .zt-team-card::before{content:'';position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:0 3px 3px 0;background:var(--zt-card-accent,#2f7cf6)}
 .zt-team-card:hover{box-shadow:0 6px 16px rgba(0,0,0,.12);border-color:var(--td-border-level-2-color);transform:translateY(-1px)}
 .zt-team-card-name{font-size:13px;line-height:18px;color:var(--td-text-color-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.zt-team-card-metrics{display:flex;align-items:flex-end;justify-content:flex-start;gap:24px;margin-top:2px}
-.zt-team-card-metric{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:0;border:0;background:transparent;font:inherit;text-align:left;cursor:pointer;border-radius:4px}
+.zt-team-card-metrics{display:flex;align-items:flex-end;justify-content:space-between;gap:6px;margin-top:2px;width:100%}
+.zt-team-card-metric{display:flex;flex:1 1 0;flex-direction:column;align-items:flex-start;gap:2px;padding:0;border:0;background:transparent;font:inherit;text-align:left;cursor:pointer;border-radius:4px;min-width:0}
 .zt-team-card > .zt-team-card-metric{width:100%;align-items:center}
 .zt-team-card-metric:hover .zt-team-card-value{text-decoration:underline}
 .zt-team-card-value{font-size:26px;line-height:32px;font-weight:600;color:var(--td-text-color-primary)}
 .zt-team-card-value-todo{color:#2f7cf6}
 .zt-team-card-value-done{color:#2ba471}
+.zt-team-card-value-overdue{color:#e34d59}
+.zt-team-card-value-today{color:#ed7b2f}
+.zt-team-date-today{display:inline-block;padding:2px 8px;border-radius:4px;background:#ed7b2f;color:#fff;font-weight:600;line-height:18px}
 .zt-team-card-label{font-size:12px;line-height:16px;color:var(--td-text-color-placeholder);white-space:nowrap}
 .zt-team-overview-empty{padding:18px 0;text-align:center;color:var(--td-text-color-placeholder);font-size:12px}
 .zt-team-error{margin:0;color:var(--td-error-color);font-size:12px}
@@ -10449,6 +11040,22 @@ body[data-ds-dark-theme] .zt-root{--zt-card-bg:#1e2a3b;--zt-card-border:#33445c;
 @container (max-width: 440px){
 .zt-dash-cards{grid-template-columns:1fr}
 }
+.zt-quick-add{margin:0 0 14px;padding:0;border:1px solid var(--td-component-border);border-radius:16px;background:var(--td-bg-color-container);box-shadow:0 6px 20px rgba(15,23,42,.08),0 2px 6px rgba(15,23,42,.05);display:flex;flex-direction:column;gap:0;overflow:hidden;color:var(--td-text-color-primary)}
+.zt-quick-add-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.18);background:#2f7cf6;color:#fff}
+.zt-quick-add-title{font-size:13px;font-weight:600;color:#fff}
+.zt-quick-add-hint{font-size:12px;color:rgba(255,255,255,.74)}
+.zt-quick-add-row{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;min-width:0;padding:14px 16px 0}
+.zt-quick-add-icon{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;margin-top:5px;border-radius:50%;background:var(--td-bg-color-secondarycontainer);color:var(--td-brand-color);flex:0 0 auto}
+.zt-quick-add-input{flex:1 1 240px;min-width:0;min-height:40px;max-height:140px;resize:vertical;box-sizing:border-box;padding:8px 10px;border:1px solid #fff;border-radius:8px;background:var(--td-bg-color-secondarycontainer);color:var(--td-text-color-primary);font:13px/22px var(--td-font-family);outline:none;transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
+.zt-quick-add-input:focus{border-color:var(--td-brand-color);background:var(--td-bg-color-container);box-shadow:0 0 0 3px var(--td-brand-color-light)}
+.zt-quick-add-input::placeholder{color:var(--td-text-color-secondary)}
+body[data-ds-dark-theme] .zt-quick-add{border-color:rgba(255,255,255,.28);box-shadow:0 6px 18px rgba(0,0,0,.32)}
+body[data-ds-dark-theme] .zt-quick-add-input{border-color:rgba(255,255,255,.18)}
+.zt-quick-add .zt-quick-add-btn{height:40px;flex:0 0 auto;padding:0 14px;border-radius:8px;font-size:13px}
+.zt-quick-add-meta{padding:8px 16px 14px 54px;font-size:11px;line-height:16px;color:var(--td-text-color-secondary)}
+.zt-quick-add-meta:has(+ .zt-quick-add-msg){padding-bottom:6px}
+.zt-quick-add-msg{padding:0 16px 14px 54px;font-size:12px;line-height:18px;color:var(--td-success-color)}
+.zt-quick-add-msg.is-error{color:var(--td-error-color)}
 .zt-cal{border:1px solid var(--td-component-stroke);border-radius:16px;background:var(--td-bg-color-container);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.06)}
 .zt-cal-head{display:flex;align-items:center;justify-content:flex-start;gap:12px;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.18);background:#2f7cf6;flex-wrap:wrap;color:#fff}
 .zt-cal-head .zt-icon-btn{color:rgba(255,255,255,.9)}
@@ -10618,6 +11225,19 @@ body[data-ds-dark-theme] .zt-root .zt-day-detail{background:var(--td-bg-color-co
 .zt-modal-close:hover{background:var(--td-bg-color-container-hover);color:var(--td-text-color-primary)}
 .zt-modal-body{padding:16px 24px 4px;display:flex;flex-direction:column;gap:16px;overflow:visible}
 .zt-modal.zt-modal-batch{width:760px}
+.zt-modal.zt-modal-settings{width:720px}
+.zt-settings-body{padding:0!important;display:block!important;overflow:hidden}
+.zt-settings-layout{display:grid;grid-template-columns:168px minmax(0,1fr);min-height:420px;max-height:calc(100vh - 210px);border-top:1px solid var(--td-component-stroke)}
+.zt-settings-nav{display:flex;flex-direction:column;gap:2px;padding:14px 10px;border-right:1px solid var(--td-component-stroke);background:var(--td-bg-color-secondarycontainer);min-width:0}
+.zt-settings-tab{height:36px;padding:0 12px;border:0;border-radius:8px;background:transparent;color:var(--td-text-color-secondary);font:var(--td-font-body-medium);font-size:13px;text-align:left;cursor:pointer;white-space:nowrap}
+.zt-settings-tab:hover{background:var(--td-bg-color-container-hover);color:var(--td-text-color-primary)}
+.zt-settings-tab-active,.zt-settings-tab-active:hover{background:var(--td-brand-color-light);color:var(--td-brand-color);font-weight:600}
+.zt-settings-panel{padding:18px 22px 10px;overflow:auto;display:flex;flex-direction:column;gap:16px;min-width:0}
+.zt-settings-group{display:flex;flex-direction:column;gap:16px;min-width:0}
+.zt-settings-heading{display:flex;flex-direction:column;gap:4px;padding-bottom:2px}
+.zt-settings-title{font-size:14px;font-weight:600;line-height:22px;color:var(--td-text-color-primary)}
+.zt-settings-sub{font-size:12px;line-height:18px;color:var(--td-text-color-placeholder)}
+@media (max-width:640px){.zt-settings-layout{grid-template-columns:132px minmax(0,1fr)}.zt-settings-panel{padding:14px 16px 8px}}
 .zt-task-modal-tabs{display:flex;gap:4px;padding:10px 24px 0;margin-top:8px;border-bottom:1px solid var(--td-component-stroke)}
 .zt-task-modal-tab{position:relative;height:34px;padding:0 12px;border:0;background:transparent;color:var(--td-text-color-secondary);cursor:pointer;font:var(--td-font-body-medium);font-size:13px;white-space:nowrap}
 .zt-task-modal-tab:hover{color:var(--td-text-color-primary)}

@@ -58,7 +58,11 @@ const STATUS_OPTIONS = {
   ],
 };
 
-function filterTeamTasks(data, query = {}) {
+function localDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+export function filterTeamTasks(data, query = {}) {
   const tasks = Array.isArray(data && data.tasks) ? data.tasks : [];
   const tab = query.tab === 'closed' ? 'closed' : 'open';
   const isClosedTab = tab === 'closed';
@@ -75,46 +79,61 @@ function filterTeamTasks(data, query = {}) {
   const dateOf = (item) => (isClosedTab ? item.resolvedDate : item.deadline) || '';
   const accountOf = (item) => (isClosedTab ? item.resolverAccount : item.assignedToAccount) || '';
   const nameOf = (item) => (isClosedTab ? item.resolver : item.assignedTo) || '';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateKey();
+  const isOpenTask = (item) => item.status === 'wait' || item.status === 'doing';
   const overdueOf = (item) =>
-    !item.done &&
-    !['done', 'closed', 'cancel'].includes(item.status) &&
+    isOpenTask(item) &&
     /^\d{4}-\d{2}-\d{2}$/.test(String(item.deadline || '')) &&
     item.deadline < today;
+  const todayOf = (item) => isOpenTask(item) && item.deadline === today;
 
-  const base = tasks.filter((item) => {
+  const scoped = tasks.filter((item) => {
     if (isClosedTab ? item.status !== 'closed' : item.status === 'closed') return false;
     if (execution && String(item.executionId || '') !== execution) return false;
     if (member === '__unknown__') {
       if (accountOf(item)) return false;
     } else if (member && accountOf(item) !== member) return false;
+    return true;
+  });
+  const base = scoped.filter((item) => {
     if (start && (!dateOf(item) || dateOf(item) < start)) return false;
     if (end && (!dateOf(item) || dateOf(item) > end)) return false;
     return true;
   });
 
   const cardsMap = new Map();
-  for (const item of base) {
+  const ensureCard = (item) => {
     const key = accountOf(item) || '__unknown__';
-    const label = nameOf(item) || '未记录';
-    if (!cardsMap.has(key)) cardsMap.set(key, { key, label, todo: 0, finished: 0, count: 0 });
-    const entry = cardsMap.get(key);
+    if (!cardsMap.has(key)) {
+      cardsMap.set(key, { key, label: nameOf(item) || '未记录', todo: 0, overdue: 0, today: 0, finished: 0, count: 0 });
+    }
+    return cardsMap.get(key);
+  };
+  for (const item of base) {
+    const entry = ensureCard(item);
     if (isClosedTab) entry.count += 1;
-    else if (item.status === 'wait' || item.status === 'doing') entry.todo += 1;
+    else if (isOpenTask(item)) entry.todo += 1;
     else if (item.status === 'done') entry.finished += 1;
   }
+  if (!isClosedTab) {
+    // 延期/今天 是全局提醒，不受下方截止时间区间影响。
+    for (const item of scoped) {
+      const entry = ensureCard(item);
+      if (overdueOf(item)) entry.overdue += 1;
+      if (todayOf(item)) entry.today += 1;
+    }
+  }
+  const cardTotal = (entry) => (isClosedTab ? entry.count : entry.todo + entry.overdue + entry.today + entry.finished);
   const cards = [...cardsMap.values()]
-    .filter((entry) => (isClosedTab ? entry.count : entry.todo + entry.finished))
-    .sort((a, b) => {
-      const av = isClosedTab ? a.count : a.todo + a.finished;
-      const bv = isClosedTab ? b.count : b.todo + b.finished;
-      return bv - av || a.label.localeCompare(b.label, 'zh-Hans-CN');
-    });
+    .filter(cardTotal)
+    .sort((a, b) => cardTotal(b) - cardTotal(a) || a.label.localeCompare(b.label, 'zh-Hans-CN'));
 
   let list = base;
   if (!isClosedTab && status) {
-    if (status === '__todo__') list = list.filter((item) => item.status === 'wait' || item.status === 'doing');
+    if (status === '__todo__') list = list.filter(isOpenTask);
     else if (status === '__done__') list = list.filter((item) => item.status === 'done');
+    else if (status === '__overdue__') list = list.filter(overdueOf);
+    else if (status === '__today__') list = list.filter(todayOf);
     else list = list.filter((item) => item.status === status);
   }
   if (q) list = list.filter((item) => String(item.title || '').toLowerCase().indexOf(q) >= 0);
@@ -568,15 +587,14 @@ export function apply(ctx, config = {}) {
           deadline: item.deadline || '',
           resolvedDate: item.resolvedDate || '',
           overdue: !closed
-            ? !item.done &&
-              !['done', 'closed', 'cancel'].includes(item.status) &&
+            ? (item.status === 'wait' || item.status === 'doing') &&
               /^\d{4}-\d{2}-\d{2}$/.test(String(item.deadline || '')) &&
-              item.deadline < new Date().toISOString().slice(0, 10)
+              item.deadline < localDateKey()
             : false,
           execution: (item.projectName ? item.projectName + ' / ' : '') + (item.executionName || ''),
         }));
         const buffer = buildTeamTasksXlsx(rows, headers, fields);
-        const name = (closed ? 'team-closed-tasks-' : 'team-tasks-') + new Date().toISOString().slice(0, 10) + '.xlsx';
+        const name = (closed ? 'team-closed-tasks-' : 'team-tasks-') + localDateKey() + '.xlsx';
         res.writeHead(200, {
           'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
           'content-disposition': 'attachment; filename="' + name + '"',
